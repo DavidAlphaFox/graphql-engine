@@ -10,6 +10,9 @@
 set -eo pipefail
 ROOT="$(readlink -f ${BASH_SOURCE[0]%/*}/../)"
 
+# succeed until the script is fixed: https://github.com/hasura/graphql-engine/issues/1161
+exit
+
 # always build tagged builds
 if [[ ! -z "$CIRCLE_TAG" ]]; then
     echo "Skipping check for tags"
@@ -28,9 +31,14 @@ if [[ ! -a "$ROOT/.ciignore" ]]; then
 fi
 
 # Check CIRCLE_COMPARE_URL first and if its not set, check for diff with master.
+    
 if [[ ! -z "$CIRCLE_COMPARE_URL" ]]; then
     # CIRCLE_COMPARE_URL is not empty, use it to get the diff
-    COMMIT_RANGE=$(echo $CIRCLE_COMPARE_URL | sed 's:^.*/compare/::g')
+    if [[ $CIRCLE_COMPARE_URL = *"commit"* ]]; then
+        COMMIT_RANGE=$(echo $CIRCLE_COMPARE_URL | sed 's:^.*/commit/::g')~1
+    else
+        COMMIT_RANGE=$(echo $CIRCLE_COMPARE_URL | sed 's:^.*/compare/::g')
+    fi
     echo "Diff: $COMMIT_RANGE"
     changes="$(git diff $COMMIT_RANGE --name-only)"
 else

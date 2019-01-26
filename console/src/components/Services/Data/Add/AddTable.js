@@ -4,12 +4,14 @@ import Helmet from 'react-helmet';
 
 import * as tooltip from './Tooltips';
 import OverlayTrigger from 'react-bootstrap/lib/OverlayTrigger';
+import Button from '../../Layout/Button/Button';
 
 import dataTypes from '../Common/DataTypes';
 import { showErrorNotification } from '../Notification';
 
 import {
   setTableName,
+  setTableComment,
   removeColumn,
   setColName,
   setColType,
@@ -36,22 +38,23 @@ import { primaryKeyAlreadyPresentMsg, fieldRepeatedMsg } from './AddWarning';
 
 import {
   listDulplicate,
-  convertListToDictUsingKV,
+  // convertListToDictUsingKV,
 } from '../../../../utils/data';
 
 import gqlPattern, {
   gqlTableErrorNotif,
   gqlColumnErrorNotif,
 } from '../Common/GraphQLValidation';
-
+/*
 const typeDescriptionDict = convertListToDictUsingKV(
   'value',
   'description',
   dataTypes
 );
-
+*/
 class AddTable extends Component {
-  componentWillMount() {
+  constructor(props) {
+    super(props);
     this.props.dispatch(setDefaults());
     const { columns, dispatch } = this.props;
     columns.map((column, i) => {
@@ -65,6 +68,7 @@ class AddTable extends Component {
       }
     });
   }
+
   componentWillUnmount() {
     this.props.dispatch(setDefaults());
   }
@@ -239,7 +243,7 @@ class AddTable extends Component {
     const cols = columns.map((column, i) => {
       let removeIcon;
       if (i + 1 === columns.length) {
-        removeIcon = null;
+        removeIcon = <i className={`${styles.fontAwosomeClose}`} />;
       } else {
         removeIcon = (
           <i
@@ -254,7 +258,7 @@ class AddTable extends Component {
       if ('default' in column) {
         defValue = column.default.value;
       }
-      let defPlaceholder = '';
+      let defPlaceholder = 'default_value';
       if (column.type === 'timestamptz') {
         defPlaceholder = 'example: now()';
       } else if (column.type === 'date') {
@@ -278,7 +282,9 @@ class AddTable extends Component {
           />
           <select
             value={column.type}
-            className={`${styles.select} form-control ${styles.add_pad_left}`}
+            className={`${styles.select} ${styles.selectWidth} form-control ${
+              styles.add_pad_left
+            }`}
             onChange={e => {
               dispatch(
                 setColType(e.target.value, i, this.refs[`nullable${i}`].checked)
@@ -305,7 +311,7 @@ class AddTable extends Component {
               </option>
             ))}
           </select>
-          {removeIcon}
+          {/*
           {typeDescriptionDict && typeDescriptionDict[column.type] ? (
             <span>
               &nbsp; &nbsp;
@@ -320,6 +326,25 @@ class AddTable extends Component {
               &nbsp; &nbsp;
             </span>
           ) : null}
+          */}
+          <input
+            placeholder={defPlaceholder}
+            type="text"
+            value={defValue}
+            className={`${styles.inputDefault} ${
+              styles.defaultWidth
+            } form-control ${styles.add_pad_left}`}
+            onChange={e => {
+              dispatch(
+                setColDefault(
+                  e.target.value,
+                  i,
+                  this.refs[`nullable${i}`].checked
+                )
+              );
+            }}
+            data-test={`col-default-${i}`}
+          />{' '}
           <input
             className={`${styles.inputCheckbox} form-control `}
             checked={columns[i].nullable}
@@ -342,25 +367,7 @@ class AddTable extends Component {
             data-test={`unique-${i.toString()}`}
           />{' '}
           <label>Unique</label>
-          <input
-            placeholder={defPlaceholder}
-            type="text"
-            value={defValue}
-            className={`${styles.inputDefault} form-control ${
-              styles.add_pad_left
-            }`}
-            onChange={e => {
-              dispatch(
-                setColDefault(
-                  e.target.value,
-                  i,
-                  this.refs[`nullable${i}`].checked
-                )
-              );
-            }}
-            data-test={`col-default-${i}`}
-          />{' '}
-          <label>Default</label>
+          {removeIcon}
         </div>
       );
     });
@@ -402,42 +409,14 @@ class AddTable extends Component {
         </div>
       );
     });
-    let alert = null;
     let createBtnText = 'Create';
     if (ongoingRequest) {
-      alert = (
-        <div className="hidden col-xs-8">
-          <div className="alert alert-warning" role="alert">
-            Creating...
-          </div>
-        </div>
-      );
       createBtnText = 'Creating...';
     } else if (lastError) {
-      alert = (
-        <div className="hidden col-xs-8">
-          <div className="alert alert-danger" role="alert">
-            Error: {JSON.stringify(lastError)}
-          </div>
-        </div>
-      );
       createBtnText = 'Creating Failed. Try again';
     } else if (internalError) {
-      alert = (
-        <div className="hidden col-xs-8">
-          <div className="alert alert-danger" role="alert">
-            Validation Error: {internalError}
-          </div>
-        </div>
-      );
+      createBtnText = 'Creating Failed. Try again';
     } else if (lastSuccess) {
-      alert = (
-        <div className="hidden col-xs-8">
-          <div className="alert alert-success" role="alert">
-            Created! Redirecting...
-          </div>
-        </div>
-      );
       createBtnText = 'Created! Redirecting...';
     }
 
@@ -454,11 +433,10 @@ class AddTable extends Component {
         </div>
         <br />
         <div className={`container-fluid ${styles.padd_left_remove}`}>
-          {alert}
           <div
             className={`${styles.addCol} col-xs-12 ${styles.padd_left_remove}`}
           >
-            <h4 className={styles.subheading_text}>Table name &nbsp; &nbsp;</h4>
+            <h4 className={styles.subheading_text}>Table Name &nbsp; &nbsp;</h4>
             <input
               type="text"
               data-test="tableName"
@@ -484,14 +462,26 @@ class AddTable extends Component {
             </h4>
             {pks}
             <hr />
-            <button
+            <h4 className={styles.subheading_text}>Comment &nbsp; &nbsp;</h4>
+            <input
+              type="text"
+              data-test="tableComment"
+              placeholder="comment"
+              className={`${styles.tableNameInput} form-control`}
+              onChange={e => {
+                dispatch(setTableComment(e.target.value));
+              }}
+            />
+            <hr />
+            <Button
               type="submit"
-              className={`btn ${styles.yellow_button}`}
               onClick={this.submitValidation.bind(this)}
               data-test="table-create"
+              color="yellow"
+              size="sm"
             >
               {createBtnText}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

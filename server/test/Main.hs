@@ -3,7 +3,6 @@
 
 module Main where
 
-import           Control.Monad.Trans.Except
 import           Data.Time.Clock            (getCurrentTime)
 import           Network.Wai                (Application)
 import           Options.Applicative
@@ -23,6 +22,8 @@ import           Hasura.Server.Auth         (AuthMode (..))
 
 
 import qualified Database.PG.Query          as PGQ
+import qualified Network.HTTP.Client        as HTTP
+import qualified Network.HTTP.Client.TLS    as HTTP
 
 import           Hasura.Server.Init
 import           Ops                        (initCatalogSafe)
@@ -43,8 +44,11 @@ resetStateTx = do
 ravenApp :: L.LoggerCtx -> PGQ.PGPool -> IO Application
 ravenApp loggerCtx pool = do
   let corsCfg = CorsConfigG "*" False -- cors is enabled
+  httpManager <- HTTP.newManager HTTP.tlsManagerSettings
   -- spockAsApp $ spockT id $ app Q.Serializable Nothing rlogger pool AMNoAuth corsCfg True -- no access key and no webhook
-  mkWaiApp Q.Serializable Nothing loggerCtx pool AMNoAuth corsCfg True -- no access key and no webhook
+  (app, _)  <- mkWaiApp Q.Serializable Nothing loggerCtx pool httpManager AMNoAuth corsCfg True -- no access key and no webhook
+  return app
+
 
 main :: IO ()
 main = do
@@ -61,7 +65,7 @@ main = do
   liftIO $ initialise pool
   -- generate the test specs
   specs <- mkSpecs
-  loggerCtx <- L.mkLoggerCtx L.defaultLoggerSettings
+  loggerCtx <- L.mkLoggerCtx $ L.defaultLoggerSettings True
   -- run the tests
   withArgs [] $ hspecWith defaultConfig $ with (ravenApp loggerCtx pool) specs
 

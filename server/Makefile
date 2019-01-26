@@ -2,12 +2,17 @@ project  := graphql-engine
 registry := hasura
 version  := $(shell ../scripts/get-version.sh)
 
-stack_resolver := lts-11.15
-packager_ver := 1.1
+# TODO: needs to be replaced with something like yq
+stack_resolver := $(shell grep '^resolver:' stack.yaml | awk '{print $$2;}')
+packager_ver := 1.2
 project_dir := $(shell pwd)
-build_dir := $(project_dir)/$(shell stack --system-ghc path --dist-dir)/build
+build_dir := $(project_dir)/$(shell stack path --dist-dir)/build
 
 build_output := /build/_server_output
+
+dev: src-lib src-exec src-rsr
+	stack build --fast
+	stack exec graphql-engine -- --database-url postgres://postgres:@localhost:5432/hge serve --enable-console
 
 image: $(project).cabal
 	docker build -t "$(registry)/$(project):$(version)" \
@@ -27,12 +32,16 @@ release-image: $(project).cabal
 		.
 
 # assumes this is built in circleci
-ci-binary-and-test: $(project).cabal
+ci-binary:
 	mkdir -p packaging/build/rootfs
-	stack test --coverage --test-arguments --database-url=$(DATABASE_URL)
+	stack $(STACK_FLAGS) build $(BUILD_FLAGS)
 	mkdir -p $(build_output)
 	cp $(build_dir)/$(project)/$(project) $(build_output)
+# cp "$(build_dir)/$(project)-test/$(project)-test" $(build_output)
 	echo "$(version)" > $(build_output)/version.txt
+
+ci-test:
+	$(build_output)/graphql-engine-test --database-url=$(DATABASE_URL)
 
 # assumes this is built in circleci
 ci-image:

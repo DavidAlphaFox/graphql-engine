@@ -1,8 +1,12 @@
 import PropTypes from 'prop-types';
 import React, { Component } from 'react';
 import { Link } from 'react-router';
-import { appPrefix } from '../push';
 import TableHeader from '../TableCommon/TableHeader';
+import {
+  activateCommentEdit,
+  updateCommentInput,
+  saveTableCommentSql,
+} from './ModifyActions';
 import {
   fkRefTableChange,
   fkLColChange,
@@ -25,9 +29,27 @@ import {
   convertListToDictUsingKV,
   convertListToDict,
 } from '../../../../utils/data';
-import { setTable } from '../DataActions';
+import {
+  setTable,
+  fetchTableComment,
+  fetchColumnComment,
+} from '../DataActions';
 import { showErrorNotification } from '../Notification';
 import gqlPattern, { gqlColumnErrorNotif } from '../Common/GraphQLValidation';
+import {
+  INTEGER,
+  SERIAL,
+  BIGINT,
+  BIGSERIAL,
+  UUID,
+  JSON,
+  JSONB,
+  TIMESTAMP,
+  TIME,
+} from '../../../../constants';
+import Button from '../../Layout/Button/Button';
+
+const appPrefix = '/data';
 
 const alterTypeOptions = dataTypes.map((datatype, index) => (
   <option value={datatype.value} key={index} title={datatype.description}>
@@ -44,11 +66,18 @@ const ColumnEditor = ({
   tableName,
   dispatch,
   currentSchema,
+  columnComment,
 }) => {
   //  eslint-disable-line no-unused-vars
   const c = column;
   const styles = require('./Modify.scss');
-  let [inullable, iunique, idefault, itype] = [null, null, null, null];
+  let [inullable, iunique, idefault, icomment, itype] = [
+    null,
+    null,
+    null,
+    null,
+    null,
+  ];
   // NOTE: the datatypes is filtered of serial and bigserial where hasuraDatatype === null
   const refTable = fkAdd.refTable;
   const tableSchema = allSchemas.find(t => t.table_name === tableName);
@@ -104,22 +133,25 @@ const ColumnEditor = ({
                   <Link
                     to={`${appPrefix}/schema/${currentSchema}/tables/${tableName}/relationships`}
                   >
-                    <button
-                      className={`${styles.default_button} btn`}
+                    <Button
+                      color="white"
+                      size="sm"
                       type="button"
                       data-test="add-rel-mod"
                     >
                       +Add relationship
-                    </button>
+                    </Button>
                   </Link>
                   &nbsp;
-                  <button
-                    className="btn btn-danger btn-sm"
+                  <Button
+                    color="red"
+                    size="sm"
                     onClick={onDeleteFK}
+                    data-test="remove-constraint-button"
                   >
                     {' '}
                     Remove Constraint{' '}
-                  </button>{' '}
+                  </Button>{' '}
                   &nbsp;
                 </h5>
               </div>
@@ -203,6 +235,70 @@ const ColumnEditor = ({
       </option>
     );
   }
+
+  const generateAlterOptions = datatypeOptions => {
+    return dataTypes.map(datatype => {
+      if (datatypeOptions.includes(datatype.value)) {
+        return (
+          <option
+            value={datatype.value}
+            key={datatype.name}
+            title={datatype.description}
+          >
+            {datatype.name}
+          </option>
+        );
+      }
+    });
+  };
+
+  const modifyAlterOptions = columntype => {
+    const integerOptions = [
+      'integer',
+      'serial',
+      'bigint',
+      'bigserial',
+      'numeric',
+      'text',
+    ];
+    const bigintOptions = ['bigint', 'bigserial', 'text', 'numeric'];
+    const uuidOptions = ['uuid', 'text'];
+    const jsonOptions = ['json', 'jsonb', 'text'];
+    const timestampOptions = ['timestamptz', 'text'];
+    const timeOptions = ['timetz', 'text'];
+    switch (columntype) {
+      case INTEGER:
+        return generateAlterOptions(integerOptions);
+
+      case SERIAL:
+        return generateAlterOptions(integerOptions);
+
+      case BIGINT:
+        return generateAlterOptions(bigintOptions);
+
+      case BIGSERIAL:
+        return generateAlterOptions(bigintOptions);
+
+      case UUID:
+        return generateAlterOptions(uuidOptions);
+
+      case JSON:
+        return generateAlterOptions(jsonOptions);
+
+      case JSONB:
+        return generateAlterOptions(jsonOptions);
+
+      case TIMESTAMP:
+        return generateAlterOptions(timestampOptions);
+
+      case TIME:
+        return generateAlterOptions(timeOptions);
+
+      default:
+        return generateAlterOptions([columntype, 'text']);
+    }
+  };
+
   return (
     <div className={`${styles.colEditor} container-fluid`}>
       <form
@@ -214,6 +310,7 @@ const ColumnEditor = ({
             inullable.value,
             iunique.value,
             idefault.value,
+            icomment.value,
             column
           );
         }}
@@ -227,7 +324,7 @@ const ColumnEditor = ({
               defaultValue={finalDefaultValue}
               disabled={isPrimaryKey}
             >
-              {alterTypeOptions}
+              {modifyAlterOptions(column.data_type)}
               {additionalOptions}
             </select>
           </div>
@@ -240,6 +337,7 @@ const ColumnEditor = ({
               className="input-sm form-control"
               defaultValue={c.is_nullable === 'NO' ? 'false' : 'true'}
               disabled={isPrimaryKey}
+              data-test="edit-col-nullable"
             >
               <option value="true">True</option>
               <option value="false">False</option>
@@ -254,6 +352,7 @@ const ColumnEditor = ({
               className="input-sm form-control"
               defaultValue={isUnique.toString()}
               disabled={isPrimaryKey}
+              data-test="edit-col-unique"
             >
               <option value="true">True</option>
               <option value="false">False</option>
@@ -269,22 +368,38 @@ const ColumnEditor = ({
               defaultValue={c.column_default ? c.column_default : null}
               type="text"
               disabled={isPrimaryKey}
+              data-test="edit-col-default"
+            />
+          </div>
+        </div>
+        <div className={`${styles.display_flex} form-group`}>
+          <label className="col-xs-3 text-right">Comment</label>
+          <div className="col-xs-6">
+            <input
+              ref={n => (icomment = n)}
+              className="input-sm form-control"
+              defaultValue={columnComment ? columnComment.result[1] : null}
+              type="text"
+              data-test="edit-col-comment"
             />
           </div>
         </div>
         {checkExistingForeignKey()}
         <div className="row">
-          <button
+          <Button
             type="submit"
-            className={`${styles.yellow_button} btn`}
+            color="yellow"
+            className={styles.button_mar_right}
+            size="sm"
             data-test="save-button"
           >
             Save
-          </button>
+          </Button>
           {!isPrimaryKey ? (
-            <button
+            <Button
               type="submit"
-              className={`${styles.yellow_button1} btn btn-danger btn-sm`}
+              color="red"
+              size="sm"
               onClick={e => {
                 e.preventDefault();
                 onDelete();
@@ -292,7 +407,7 @@ const ColumnEditor = ({
               data-test="remove-button"
             >
               Remove
-            </button>
+            </Button>
           ) : null}
         </div>
       </form>
@@ -305,9 +420,10 @@ const ColumnEditor = ({
 
 class ModifyTable extends Component {
   componentDidMount() {
-    this.props.dispatch({ type: RESET });
-
-    this.props.dispatch(setTable(this.props.tableName));
+    const { dispatch } = this.props;
+    dispatch({ type: RESET });
+    dispatch(setTable(this.props.tableName));
+    dispatch(fetchTableComment(this.props.tableName));
   }
 
   render() {
@@ -319,6 +435,9 @@ class ModifyTable extends Component {
       fkAdd,
       migrationMode,
       currentSchema,
+      tableComment,
+      columnComment,
+      tableCommentEdit,
     } = this.props;
     const styles = require('./Modify.scss');
     const tableSchema = allSchemas.find(t => t.table_name === tableName);
@@ -336,7 +455,7 @@ class ModifyTable extends Component {
       let colEditor = null;
       let bg = '';
       const colName = c.column_name;
-      const onSubmit = (type, nullable, unique, def, column) => {
+      const onSubmit = (type, nullable, unique, def, comment, column) => {
         // dispatch(saveColumnChangesSql(tableName, colName, type, nullable, def, column));
         if (fkAdd.fkCheckBox === true) {
           dispatch(fkLColChange(column.column_name));
@@ -348,6 +467,7 @@ class ModifyTable extends Component {
               nullable,
               unique,
               def,
+              comment,
               column
             )
           );
@@ -360,6 +480,7 @@ class ModifyTable extends Component {
               nullable,
               unique,
               def,
+              comment,
               column
             )
           );
@@ -390,6 +511,7 @@ class ModifyTable extends Component {
               dispatch={dispatch}
               allSchemas={allSchemas}
               currentSchema={currentSchema}
+              columnComment={columnComment}
             />
           );
         } else {
@@ -403,6 +525,7 @@ class ModifyTable extends Component {
               dispatch={dispatch}
               allSchemas={allSchemas}
               currentSchema={currentSchema}
+              columnComment={columnComment}
             />
           );
         }
@@ -447,15 +570,30 @@ class ModifyTable extends Component {
           <div className="container-fluid">
             <div className="row">
               <h5 className={styles.padd_bottom}>
-                <button
-                  className={`${styles.add_mar_small} btn btn-xs btn-default`}
-                  onClick={() => {
-                    dispatch({ type: TOGGLE_ACTIVE_COLUMN, column: colName });
-                  }}
+                <Button
+                  className={styles.add_mar_small}
+                  size="xs"
+                  color="white"
                   data-test={`edit-${colName}`}
+                  onClick={() => {
+                    if (activeEdit.column === colName) {
+                      // just closing the column
+                      dispatch({ type: TOGGLE_ACTIVE_COLUMN, column: colName });
+                    } else {
+                      // fetch column comment
+                      dispatch(fetchColumnComment(tableName, colName)).then(
+                        () => {
+                          dispatch({
+                            type: TOGGLE_ACTIVE_COLUMN,
+                            column: colName,
+                          });
+                        }
+                      );
+                    }
+                  }}
                 >
                   {btnText}
-                </button>
+                </Button>
                 <b>{colName}</b> {keyProperties()}
                 &nbsp;
               </h5>
@@ -472,21 +610,103 @@ class ModifyTable extends Component {
     let colUniqueInput;
     let colDefaultInput;
 
-    // check if platform version is >= 0.15.33 and show untrack
+    // TODO
     const untrackBtn = (
-      <button
+      <Button
         type="submit"
-        className={`${styles.add_mar_right} btn btn-sm btn-default`}
+        className={styles.add_mar_right}
+        color="white"
+        size="sm"
         onClick={() => {
           const isOk = confirm('Are you sure to untrack?');
           if (isOk) {
             dispatch(untrackTableSql(tableName));
           }
         }}
+        data-test="untrack-table"
       >
         Untrack Table
-      </button>
+      </Button>
     );
+
+    const editCommentClicked = () => {
+      let commentText =
+        tableComment && tableComment.result[1] && tableComment.result[1][0]
+          ? tableComment.result[1][0]
+          : null;
+      commentText = commentText !== 'NULL' ? commentText : null;
+      dispatch(activateCommentEdit(true, commentText));
+    };
+    const commentEdited = e => {
+      dispatch(updateCommentInput(e.target.value));
+    };
+    const commentEditSave = () => {
+      dispatch(saveTableCommentSql(true));
+    };
+    const commentEditCancel = () => {
+      dispatch(activateCommentEdit(false, ''));
+    };
+    let commentText =
+      tableComment && tableComment.result[1] && tableComment.result[1][0]
+        ? tableComment.result[1][0]
+        : null;
+    commentText = commentText !== 'NULL' ? commentText : null;
+    let commentHtml = (
+      <div className={styles.add_pad_bottom}>
+        <div className={styles.commentText}>Add a comment</div>
+        <div onClick={editCommentClicked} className={styles.commentEdit}>
+          <i className="fa fa-edit" />
+        </div>
+      </div>
+    );
+    if (commentText && !tableCommentEdit.enabled) {
+      commentHtml = (
+        <div className={styles.mar_bottom}>
+          <div className={styles.commentText + ' alert alert-warning'}>
+            {commentText}
+          </div>
+          <div onClick={editCommentClicked} className={styles.commentEdit}>
+            <i className="fa fa-edit" />
+          </div>
+        </div>
+      );
+    } else if (tableCommentEdit.enabled) {
+      commentHtml = (
+        <div className={styles.mar_bottom}>
+          <input
+            onChange={commentEdited}
+            className={'form-control ' + styles.commentInput}
+            type="text"
+            value={tableCommentEdit.value}
+            defaultValue={commentText}
+          />
+          <div
+            onClick={commentEditSave}
+            className={
+              styles.display_inline +
+              ' ' +
+              styles.add_pad_left +
+              ' ' +
+              styles.comment_action
+            }
+          >
+            Save
+          </div>
+          <div
+            onClick={commentEditCancel}
+            className={
+              styles.display_inline +
+              ' ' +
+              styles.add_pad_left +
+              ' ' +
+              styles.comment_action
+            }
+          >
+            Cancel
+          </div>
+        </div>
+      );
+    }
 
     // if (tableSchema.primary_key.columns > 0) {}
     return (
@@ -500,9 +720,18 @@ class ModifyTable extends Component {
         />
         <br />
         <div className={`container-fluid ${styles.padd_left_remove}`}>
-          <div className={`col-xs-9 ${styles.padd_left_remove}`}>
+          <div
+            className={
+              `col-xs-9 ${styles.padd_left_remove}` +
+              ' ' +
+              styles.modifyMinWidth
+            }
+          >
+            {commentHtml}
             <h4 className={styles.subheading_text}>Columns</h4>
             {columnEditors}
+            <hr />
+            <h4 className={styles.subheading_text}>Add a new column</h4>
             <div className={styles.activeEdit}>
               <form
                 className={`form-inline ${styles.display_flex}`}
@@ -593,20 +822,22 @@ class ModifyTable extends Component {
                   ref={n => (colDefaultInput = n)}
                   data-test="default-value"
                 />
-                <button
+                <Button
                   type="submit"
-                  className="btn btn-sm btn-warning"
+                  color="yellow"
+                  size="sm"
                   data-test="add-column-button"
                 >
                   + Add column
-                </button>
+                </Button>
               </form>
             </div>
             <hr />
             {untrackBtn}
-            <button
+            <Button
               type="submit"
-              className="btn btn-sm btn-danger"
+              color="red"
+              size="sm"
               onClick={() => {
                 const isOk = confirm('Are you sure?');
                 if (isOk) {
@@ -616,7 +847,7 @@ class ModifyTable extends Component {
               data-test="delete-table"
             >
               Delete table
-            </button>
+            </Button>
             <br />
             <br />
           </div>
@@ -631,6 +862,8 @@ ModifyTable.propTypes = {
   currentSchema: PropTypes.string.isRequired,
   allSchemas: PropTypes.array.isRequired,
   migrationMode: PropTypes.bool.isRequired,
+  tableComment: PropTypes.string.isRequired,
+  columnComment: PropTypes.string.isRequired,
   activeEdit: PropTypes.object.isRequired,
   fkAdd: PropTypes.object.isRequired,
   relAdd: PropTypes.object.isRequired,
@@ -646,6 +879,8 @@ const mapStateToProps = (state, ownProps) => ({
   allSchemas: state.tables.allSchemas,
   migrationMode: state.main.migrationMode,
   currentSchema: state.tables.currentSchema,
+  tableComment: state.tables.tableComment,
+  columnComment: state.tables.columnComment,
   ...state.tables.modify,
 });
 

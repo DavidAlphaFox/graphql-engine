@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Hasura.SQL.Value where
 
 import           Hasura.SQL.GeoJSON
@@ -10,12 +8,12 @@ import qualified Database.PG.Query          as Q
 import qualified Database.PG.Query.PTI      as PTI
 import qualified Hasura.SQL.DML             as S
 
-import           Hasura.Prelude
 import           Data.Aeson
 import           Data.Aeson.Internal
 import           Data.Int
 import           Data.Scientific
 import           Data.Time
+import           Hasura.Prelude
 
 import qualified Data.Aeson.Text            as AE
 import qualified Data.Aeson.Types           as AT
@@ -44,7 +42,7 @@ data PGColValue
   | PGNull !PGColType
   | PGValJSON !Q.JSON
   | PGValJSONB !Q.JSONB
-  | PGValGeo !Geometry
+  | PGValGeo !GeometryWithCRS
   | PGValUnknown !T.Text
   deriving (Show, Eq)
 
@@ -190,8 +188,32 @@ iresToEither (ISuccess a)   = return a
 pgValFromJVal :: (FromJSON a) => Value -> Either String a
 pgValFromJVal = iresToEither . ifromJSON
 
+applyGeomFromGeoJson :: S.SQLExp -> S.SQLExp
+applyGeomFromGeoJson v =
+  S.SEFnApp "ST_GeomFromGeoJSON" [v] Nothing
+
+isGeoTy :: PGColType -> Bool
+isGeoTy = \case
+  PGGeometry  -> True
+  PGGeography -> True
+  _           -> False
+
 toPrepParam :: Int -> PGColType -> S.SQLExp
-toPrepParam i pct =
-  if pct == PGGeometry || pct == PGGeography
-  then S.SEFnApp "ST_GeomFromGeoJSON" [S.SEPrep i] Nothing
-  else S.SEPrep i
+toPrepParam i =
+  bool prepVal (applyGeomFromGeoJson prepVal) . isGeoTy
+  where
+    prepVal = S.SEPrep i
+
+toTxtValue :: PGColType -> PGColValue -> S.SQLExp
+toTxtValue ty val =
+  S.annotateExp txtVal ty
+  where
+    txtVal = withGeoVal $ txtEncoder val
+    withGeoVal v =
+      bool v (applyGeomFromGeoJson v) $ isGeoTy ty
+
+pgColValueToInt :: PGColValue -> Maybe Int
+pgColValueToInt (PGValInteger i)  = Just $ fromIntegral i
+pgColValueToInt (PGValSmallInt i) = Just $ fromIntegral i
+pgColValueToInt (PGValBigInt i)   = Just $ fromIntegral i
+pgColValueToInt _                 = Nothing

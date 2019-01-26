@@ -177,7 +177,6 @@ const createWsClient = (url, headers) => {
     websocketProtocol = 'wss';
   }
   const headersFinal = getHeadersAsJSON(headers);
-  setTimeout(() => null, 500);
   const graphqlUrl = `${websocketProtocol}://${url.split('//')[1]}`;
   const client = new SubscriptionClient(graphqlUrl, {
     connectionParams: {
@@ -185,6 +184,7 @@ const createWsClient = (url, headers) => {
         ...headersFinal,
       },
     },
+    reconnect: true,
   });
   return client;
 };
@@ -198,7 +198,6 @@ const graphqlSubscriber = (graphQLParams, url, headers) => {
     };
     return fetcher(graphQLParams);
   } catch (e) {
-    console.log(e);
     return e.json();
   }
 };
@@ -226,6 +225,45 @@ const graphQLFetcherFinal = (graphQLParams, url, headers) => {
     body: JSON.stringify(graphQLParams),
   }).then(response => response.json());
 };
+
+/* Analyse Fetcher */
+const analyzeFetcher = (url, headers, analyzeApiChange) => {
+  return query => {
+    const editedQuery = {
+      query,
+    };
+    let user = {};
+    const reqHeaders = getHeadersAsJSON(headers);
+    if (!analyzeApiChange) {
+      user.role = 'admin';
+      user.headers = reqHeaders;
+    } else {
+      user = {
+        'x-hasura-role': 'admin',
+      };
+    }
+
+    // Check if x-hasura-role is available in some form in the headers
+    const totalHeaders = Object.keys(reqHeaders);
+    totalHeaders.forEach((t) => {
+      // If header has x-hasura-*
+      const lHead = t.toLowerCase();
+      if (lHead.slice(0, 'x-hasura-'.length) === 'x-hasura-') {
+        user[lHead] = reqHeaders[t];
+        delete reqHeaders[t];
+      }
+    });
+
+    editedQuery.user = user;
+    return fetch(`${url}/explain`, {
+      method: 'post',
+      headers: reqHeaders,
+      body: JSON.stringify(editedQuery),
+      credentials: 'include',
+    });
+  };
+};
+/* End of it */
 
 const changeRequestHeader = (index, key, newValue, isDisabled) => ({
   type: REQUEST_HEADER_CHANGED,
@@ -397,6 +435,12 @@ const getStateAfterClearingHistory = state => {
       },
     ],
   };
+};
+
+const getRemoteQueries = (queryUrl, cb) => {
+  fetch(queryUrl)
+    .then(resp => resp.text().then(cb))
+    .catch(e => console.log('Invalid query URL: ', e));
 };
 
 const apiExplorerReducer = (state = defaultState, action) => {
@@ -626,4 +670,6 @@ export {
   createWsClient,
   focusHeaderTextbox,
   unfocusTypingHeader,
+  getRemoteQueries,
+  analyzeFetcher,
 };

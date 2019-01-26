@@ -1,41 +1,30 @@
 import React from 'react';
 import { Link } from 'react-router';
+import _push from './push';
 import Helmet from 'react-helmet';
-// import { push } from 'react-router-redux';
-
 import PageContainer from './PageContainer/PageContainer';
+import globals from '../../../Globals';
 
-import { appPrefix } from './push';
-/*
 import {
-  UPDATE_CURRENT_SCHEMA,
   loadSchema,
   loadUntrackedSchema,
+  loadUntrackedRelations,
+  UPDATE_CURRENT_SCHEMA,
+  fetchFunctionInit,
 } from './DataActions';
-*/
-import globals from '../../../Globals';
+
+const sectionPrefix = '/data';
 
 const DataHeader = ({
   schema,
-  // schemaList,
   currentSchema,
+  schemaList,
   children,
   location,
   dispatch,
 }) => {
   const styles = require('./TableCommon/Table.scss');
   const currentLocation = location.pathname;
-  /*
-  const handleSchemaChange = e => {
-    const updatedSchema = e.target.value;
-    dispatch(push('/data/schema/' + updatedSchema));
-    Promise.all([
-      dispatch({ type: UPDATE_CURRENT_SCHEMA, currentSchema: updatedSchema }),
-      dispatch(loadSchema()),
-      dispatch(loadUntrackedSchema()),
-    ]);
-  };
-  */
   let migrationSection = null;
   if (globals.consoleMode === 'cli') {
     migrationSection = (
@@ -45,10 +34,27 @@ const DataHeader = ({
           currentLocation.indexOf('migrations') !== -1 ? styles.active : ''
         }
       >
-        <Link to={appPrefix + '/migrations'}>Migrations</Link>
+        <Link
+          className={styles.sidebarMigration}
+          to={sectionPrefix + '/migrations'}
+        >
+          Migrations
+        </Link>
       </li>
     );
   }
+
+  const handleSchemaChange = e => {
+    const updatedSchema = e.target.value;
+    dispatch(_push(`/schema/${updatedSchema}`));
+    Promise.all([
+      dispatch({ type: UPDATE_CURRENT_SCHEMA, currentSchema: updatedSchema }),
+      dispatch(loadSchema()),
+      dispatch(loadUntrackedSchema()),
+      dispatch(loadUntrackedRelations()),
+      dispatch(fetchFunctionInit()),
+    ]);
+  };
   return (
     <div>
       <Helmet title={'Data | Hasura'} />
@@ -71,31 +77,23 @@ const DataHeader = ({
                   >
                     <Link
                       className={styles.schemaBorder}
-                      to={appPrefix + '/schema'}
+                      to={sectionPrefix + '/schema'}
                     >
-                      Schema
+                      Schema:
                     </Link>
-                  </div>
-                  <div className={styles.schemaSidebarSection}>
-                    {/* disable dropdown selection for now
                     <select
                       onChange={handleSchemaChange}
-                      className={'form-control'}
+                      className={styles.changeSchema + ' form-control'}
                     >
-                      {schemaList.map(s => {
-                        if (s.schema_name === currentSchema) {
-                          return (
-                            <option key={s.schema_name} selected="selected">
-                              {s.schema_name}
-                            </option>
-                          );
-                        }
-                        return (
-                          <option key={s.schema_name}>{s.schema_name}</option>
-                        );
-                      })}
+                      {schemaList.map(s => (
+                        <option
+                          key={s.schema_name}
+                          selected={s.schema_name === currentSchema}
+                        >
+                          {s.schema_name}
+                        </option>
+                      ))}
                     </select>
-                    */}
                   </div>
                 </div>
                 <PageContainer
@@ -111,7 +109,11 @@ const DataHeader = ({
                   currentLocation.indexOf('sql') !== -1 ? styles.active : ''
                 }
               >
-                <Link to={appPrefix + '/sql'} data-test="sql-link">
+                <Link
+                  className={styles.wd100}
+                  to={sectionPrefix + '/sql'}
+                  data-test="sql-link"
+                >
                   SQL
                 </Link>
               </li>

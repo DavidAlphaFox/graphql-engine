@@ -3,20 +3,27 @@ import React, { Component } from 'react';
 import AceEditor from 'react-ace';
 import ViewHeader from '../TableBrowseRows/ViewHeader';
 import {
+  activateCommentEdit,
+  updateCommentInput,
+  saveTableCommentSql,
+} from './ModifyActions';
+import {
   fetchViewDefinition,
   deleteViewSql,
   untrackTableSql,
   RESET,
-} from '../TableModify/ModifyActions';
+} from './ModifyActions';
 import { ordinalColSort } from '../utils';
-import { setTable } from '../DataActions';
+import { setTable, fetchTableComment } from '../DataActions';
+import Button from '../../Layout/Button/Button';
 
 class ModifyView extends Component {
   componentDidMount() {
-    this.props.dispatch({ type: RESET });
-
-    this.props.dispatch(setTable(this.props.tableName));
-    this.props.dispatch(fetchViewDefinition(this.props.tableName, false));
+    const { dispatch } = this.props;
+    dispatch({ type: RESET });
+    dispatch(setTable(this.props.tableName));
+    dispatch(fetchViewDefinition(this.props.tableName, false));
+    dispatch(fetchTableComment(this.props.tableName));
   }
 
   modifyViewDefinition = viewName => {
@@ -35,6 +42,9 @@ class ModifyView extends Component {
       lastSuccess,
       dispatch,
       currentSchema,
+      tableComment,
+      tableCommentEdit,
+      migrationMode,
     } = this.props;
 
     const styles = require('./Modify.scss');
@@ -74,9 +84,9 @@ class ModifyView extends Component {
           <div className="container-fluid">
             <div className="row">
               <h5 className={styles.padd_bottom}>
-                <button disabled="disabled" className="btn btn-xs btn-warning">
+                <Button disabled="disabled" size="xs" color="yellow">
                   {btnText}
-                </button>{' '}
+                </Button>{' '}
                 &nbsp; {c.column_name}
               </h5>
             </div>
@@ -86,9 +96,11 @@ class ModifyView extends Component {
     });
 
     const untrackBtn = (
-      <button
+      <Button
         type="submit"
-        className={styles.add_mar_right + ' btn btn-sm btn-default'}
+        className={styles.add_mar_right}
+        color="white"
+        size="sm"
         onClick={() => {
           const isOk = confirm('Are you sure to untrack?');
           if (isOk) {
@@ -98,8 +110,78 @@ class ModifyView extends Component {
         data-test="untrack-view"
       >
         Untrack View
-      </button>
+      </Button>
     );
+
+    const editCommentClicked = () => {
+      dispatch(activateCommentEdit(true, tableComment));
+    };
+    const commentEdited = e => {
+      dispatch(updateCommentInput(e.target.value));
+    };
+    const commentEditSave = () => {
+      dispatch(saveTableCommentSql(false));
+    };
+    const commentEditCancel = () => {
+      dispatch(activateCommentEdit(false, null));
+    };
+    const commentText = tableComment ? tableComment.result[1] : null;
+    let commentHtml = (
+      <div className={styles.add_pad_bottom}>
+        <div className={styles.commentText}>Add a comment</div>
+        <div onClick={editCommentClicked} className={styles.commentEdit}>
+          <i className="fa fa-edit" />
+        </div>
+      </div>
+    );
+    if (commentText && !tableCommentEdit.enabled) {
+      commentHtml = (
+        <div>
+          <div className={styles.commentText + ' alert alert-warning'}>
+            {commentText}
+          </div>
+          <div onClick={editCommentClicked} className={styles.commentEdit}>
+            <i className="fa fa-edit" />
+          </div>
+        </div>
+      );
+    } else if (tableCommentEdit.enabled) {
+      commentHtml = (
+        <div className={styles.mar_bottom}>
+          <input
+            onChange={commentEdited}
+            className={'form-control ' + styles.commentInput}
+            type="text"
+            value={tableCommentEdit.value}
+            defaultValue={tableComment.result[1]}
+          />
+          <div
+            onClick={commentEditSave}
+            className={
+              styles.display_inline +
+              ' ' +
+              styles.add_pad_left +
+              ' ' +
+              styles.comment_action
+            }
+          >
+            Save
+          </div>
+          <div
+            onClick={commentEditCancel}
+            className={
+              styles.display_inline +
+              ' ' +
+              styles.add_pad_left +
+              ' ' +
+              styles.comment_action
+            }
+          >
+            Cancel
+          </div>
+        </div>
+      );
+    }
 
     return (
       <div className={styles.container + ' container-fluid'}>
@@ -108,10 +190,12 @@ class ModifyView extends Component {
           tableName={tableName}
           tabName="modify"
           currentSchema={currentSchema}
+          migrationMode={migrationMode}
         />
         <br />
         <div className={'container-fluid ' + styles.padd_left_remove}>
           <div className={'col-xs-8 ' + styles.padd_left_remove}>
+            {commentHtml}
             <h4 className={styles.subheading_text}>Columns</h4>
             {columnEditors}
             <br />
@@ -129,25 +213,23 @@ class ModifyView extends Component {
               readOnly
             />
             <hr />
-            <button
+            <Button
               type="submit"
-              className={
-                'btn btn-sm ' +
-                styles.yellow_button +
-                ' ' +
-                styles.add_mar_right
-              }
+              color="yellow"
+              size="sm"
+              className={styles.add_mar_right}
               onClick={() => {
                 this.modifyViewDefinition(tableName);
               }}
               data-test="modify-view"
             >
               Modify
-            </button>
+            </Button>
             {untrackBtn}
-            <button
+            <Button
               type="submit"
-              className={'btn btn-sm btn-danger'}
+              color="red"
+              size="sm"
               onClick={() => {
                 const isOk = confirm('Are you sure');
                 if (isOk) {
@@ -157,7 +239,7 @@ class ModifyView extends Component {
               data-test="delete-view"
             >
               Delete view
-            </button>
+            </Button>
             <br />
             <br />
           </div>
@@ -173,6 +255,7 @@ ModifyView.propTypes = {
   tableName: PropTypes.string.isRequired,
   allSchemas: PropTypes.array.isRequired,
   currentSchema: PropTypes.string.isRequired,
+  tableComment: PropTypes.string.isRequired,
   activeEdit: PropTypes.object.isRequired,
   ongoingRequest: PropTypes.bool.isRequired,
   lastError: PropTypes.object,
@@ -186,6 +269,8 @@ const mapStateToProps = (state, ownProps) => {
     allSchemas: state.tables.allSchemas,
     sql: state.rawSQL.sql,
     currentSchema: state.tables.currentSchema,
+    tableComment: state.tables.tableComment,
+    migrationMode: state.main.migrationMode,
     ...state.tables.modify,
   };
 };

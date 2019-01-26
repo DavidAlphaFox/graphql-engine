@@ -1,24 +1,19 @@
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell   #-}
-
 module Hasura.Server.Version
-  ( getVersion
+  ( currentVersion
   , consoleVersion
   )
 where
 
 import           Control.Lens        ((^.))
-import           Data.Aeson
-import           Web.Spock.Core
 
 import qualified Data.SemVer         as V
 import qualified Data.Text           as T
 
 import           Hasura.Prelude
-import           Hasura.Server.Utils (jsonHeader, runScript)
+import           Hasura.Server.Utils (runScript)
 
 version :: T.Text
-version = T.dropWhileEnd (== '\n') $ $(runScript "../scripts/get-version.sh")
+version = T.dropWhileEnd (== '\n') $(runScript "../scripts/get-version.sh")
 
 consoleVersion :: T.Text
 consoleVersion = case V.fromText $ T.dropWhile (== 'v') version of
@@ -31,7 +26,5 @@ mkVersion ver = T.pack $ "v" ++ show major ++ "." ++ show minor
     major = ver ^. V.major
     minor = ver ^. V.minor
 
-getVersion :: (MonadIO m) => ActionT m ()
-getVersion = do
-  uncurry setHeader jsonHeader
-  lazyBytes $ encode $ object [ "version" .= version ]
+currentVersion :: T.Text
+currentVersion = version

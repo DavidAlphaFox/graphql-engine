@@ -1,4 +1,8 @@
-import { defaultModifyState, defaultPermissionsState } from '../DataState';
+import {
+  defaultModifyState,
+  defaultPermissionsState,
+  defaultInsertSetState,
+} from '../DataState';
 
 import { MAKE_REQUEST, REQUEST_SUCCESS, REQUEST_ERROR } from '../DataActions';
 
@@ -15,6 +19,8 @@ import {
   FK_ADD_FORM_ERROR,
   FK_RESET,
   TOGGLE_FK_CHECKBOX,
+  TABLE_COMMENT_EDIT,
+  TABLE_COMMENT_INPUT_EDIT,
 } from '../TableModify/ModifyActions';
 
 // TABLE RELATIONSHIPS
@@ -36,23 +42,38 @@ import {
 
 import {
   PERM_OPEN_EDIT,
+  PERM_ADD_TABLE_SCHEMAS,
   PERM_SET_FILTER,
   PERM_SET_FILTER_SAME_AS,
   PERM_TOGGLE_COLUMN,
   PERM_TOGGLE_ALL_COLUMNS,
   PERM_ALLOW_ALL,
+  PERM_TOGGLE_MODIFY_LIMIT,
   PERM_TOGGLE_ALLOW_UPSERT,
+  PERM_TOGGLE_ALLOW_AGGREGATION,
   PERM_CUSTOM_CHECKED,
   PERM_REMOVE_ACCESS,
   PERM_SAVE_PERMISSIONS,
   PERM_CLOSE_EDIT,
   PERM_SET_ROLE_NAME,
+  PERM_SELECT_BULK,
+  PERM_DESELECT_BULK,
+  PERM_RESET_BULK_SELECT,
+  PERM_RESET_BULK_SAME_SELECT,
+  PERM_SAME_APPLY_BULK,
+  PERM_DESELECT_SAME_APPLY_BULK,
   toggleColumn,
   toggleAllColumns,
   getFilterKey,
   getBasePermissionsState,
   updatePermissionsState,
   deleteFromPermissionsState,
+  updateBulkSelect,
+  updateBulkSameSelect,
+  CREATE_NEW_INSERT_SET_VAL,
+  DELETE_INSERT_SET_VAL,
+  UPDATE_PERM_SET_KEY_VALUE,
+  TOGGLE_PERM_INSERT_SET_OPERATION_CHECK,
 } from '../TablePermissions/Actions';
 
 const modifyReducer = (tableName, schemas, modifyStateOrig, action) => {
@@ -107,7 +128,7 @@ const modifyReducer = (tableName, schemas, modifyStateOrig, action) => {
         ...modifyState,
         relAdd: {
           ...modifyState.relAdd,
-          isManualExpanded: true,
+          isManualExpanded: !modifyState.relAdd.isManualExpanded,
         },
       };
     case REL_NAME_CHANGED:
@@ -137,14 +158,7 @@ const modifyReducer = (tableName, schemas, modifyStateOrig, action) => {
       return {
         ...modifyState,
         relAdd: {
-          isActive: true,
-          tableName: '',
-          name: '',
-          isObjRel: null,
-          lcol: '',
-          rTable: null,
-          rcol: '',
-          manualColumns: [],
+          ...defaultModifyState.relAdd,
         },
       };
     case REL_SET_TYPE:
@@ -153,8 +167,6 @@ const modifyReducer = (tableName, schemas, modifyStateOrig, action) => {
         relAdd: {
           ...modifyState.relAdd,
           isObjRel: action.isObjRel,
-          rTable: null,
-          rcol: '',
         },
       };
     case REL_SET_RTABLE:
@@ -243,16 +255,51 @@ const modifyReducer = (tableName, schemas, modifyStateOrig, action) => {
           fkCheckBox: action.checked,
         },
       };
+    case TABLE_COMMENT_EDIT:
+      return {
+        ...modifyState,
+        tableCommentEdit: {
+          ...modifyState.tableCommentEdit,
+          enabled: action.data.enabled,
+          editedValue: action.data.value,
+        },
+      };
+    case TABLE_COMMENT_INPUT_EDIT:
+      return {
+        ...modifyState,
+        tableCommentEdit: {
+          ...modifyState.tableCommentEdit,
+          editedValue: action.value,
+        },
+      };
 
     case PERM_OPEN_EDIT:
+      const permState = getBasePermissionsState(
+        action.tableSchema,
+        action.role,
+        action.query,
+        action.insertPermColumnRestriction
+      );
       return {
         ...modifyState,
         permissionsState: {
-          ...getBasePermissionsState(
-            action.tableSchema,
-            action.role,
-            action.query
-          ),
+          ...permState,
+          tableSchemas: schemas,
+        },
+        prevPermissionState: {
+          ...permState,
+        },
+      };
+
+    case PERM_ADD_TABLE_SCHEMAS:
+      return {
+        ...modifyState,
+        permissionsState: {
+          ...modifyState.permissionsState,
+          tableSchemas: [
+            ...modifyState.permissionsState.tableSchemas,
+            ...action.schemas,
+          ],
         },
       };
 
@@ -280,6 +327,30 @@ const modifyReducer = (tableName, schemas, modifyStateOrig, action) => {
           ...updatePermissionsState(
             modifyState.permissionsState,
             'allow_upsert',
+            action.data
+          ),
+        },
+      };
+
+    case PERM_TOGGLE_ALLOW_AGGREGATION:
+      return {
+        ...modifyState,
+        permissionsState: {
+          ...updatePermissionsState(
+            modifyState.permissionsState,
+            'allow_aggregations',
+            action.data
+          ),
+        },
+      };
+
+    case PERM_TOGGLE_MODIFY_LIMIT:
+      return {
+        ...modifyState,
+        permissionsState: {
+          ...updatePermissionsState(
+            modifyState.permissionsState,
+            'limit',
             action.data
           ),
         },
@@ -362,6 +433,155 @@ const modifyReducer = (tableName, schemas, modifyStateOrig, action) => {
     case PERM_SAVE_PERMISSIONS:
       return {
         ...modifyState,
+      };
+
+    case PERM_SELECT_BULK:
+      return {
+        ...modifyState,
+        permissionsState: {
+          ...modifyState.permissionsState,
+          bulkSelect: updateBulkSelect(
+            modifyState.permissionsState,
+            action.data,
+            true
+          ),
+        },
+      };
+    case PERM_DESELECT_BULK:
+      return {
+        ...modifyState,
+        permissionsState: {
+          ...modifyState.permissionsState,
+          bulkSelect: updateBulkSelect(
+            modifyState.permissionsState,
+            action.data,
+            false
+          ),
+        },
+      };
+    case PERM_SAME_APPLY_BULK:
+      return {
+        ...modifyState,
+        permissionsState: {
+          ...modifyState.permissionsState,
+          applySamePermissions: updateBulkSameSelect(
+            modifyState.permissionsState,
+            action.data,
+            true
+          ),
+        },
+      };
+    case PERM_DESELECT_SAME_APPLY_BULK:
+      return {
+        ...modifyState,
+        permissionsState: {
+          ...modifyState.permissionsState,
+          applySamePermissions: updateBulkSameSelect(
+            modifyState.permissionsState,
+            action.data,
+            false
+          ),
+        },
+      };
+
+    /* Set operations */
+    case TOGGLE_PERM_INSERT_SET_OPERATION_CHECK:
+      return {
+        ...modifyState,
+        permissionsState: {
+          ...modifyState.permissionsState,
+          insert: {
+            ...modifyState.permissionsState.insert,
+            isSetConfigChecked: !modifyState.permissionsState.insert
+              .isSetConfigChecked,
+          },
+        },
+      };
+
+    case CREATE_NEW_INSERT_SET_VAL:
+      return {
+        ...modifyState,
+        permissionsState: {
+          ...modifyState.permissionsState,
+          insert: {
+            ...modifyState.permissionsState.insert,
+            localSet: [
+              ...modifyState.permissionsState.insert.localSet.slice(),
+              { ...defaultInsertSetState },
+            ],
+          },
+        },
+      };
+
+    case DELETE_INSERT_SET_VAL:
+      const deleteIndex = action.data.index;
+      return {
+        ...modifyState,
+        permissionsState: {
+          ...modifyState.permissionsState,
+          insert: {
+            ...modifyState.permissionsState.insert,
+            localSet: [
+              ...modifyState.permissionsState.insert.localSet.slice(
+                0,
+                deleteIndex
+              ),
+              ...modifyState.permissionsState.insert.localSet.slice(
+                deleteIndex + 1,
+                modifyState.permissionsState.insert.localSet.length
+              ),
+            ],
+          },
+        },
+      };
+
+    case UPDATE_PERM_SET_KEY_VALUE:
+      const updatedIndex = action.data.index;
+      const setKeyVal =
+        modifyState.permissionsState.insert.localSet[updatedIndex];
+      setKeyVal[action.data.key] = action.data.value;
+      if (action.data.key === 'key') {
+        // Clear if key changes
+        setKeyVal.value = '';
+      }
+
+      return {
+        ...modifyState,
+        permissionsState: {
+          ...modifyState.permissionsState,
+          insert: {
+            ...modifyState.permissionsState.insert,
+            localSet: [
+              ...modifyState.permissionsState.insert.localSet.slice(
+                0,
+                updatedIndex
+              ),
+              { ...setKeyVal },
+              ...modifyState.permissionsState.insert.localSet.slice(
+                updatedIndex + 1,
+                modifyState.permissionsState.insert.localSet.length
+              ),
+            ],
+          },
+        },
+      };
+
+    case PERM_RESET_BULK_SELECT:
+      return {
+        ...modifyState,
+        permissionsState: {
+          ...modifyState.permissionsState,
+          bulkSelect: [],
+        },
+      };
+
+    case PERM_RESET_BULK_SAME_SELECT:
+      return {
+        ...modifyState,
+        permissionsState: {
+          ...modifyState.permissionsState,
+          applySamePermissions: [],
+        },
       };
 
     case TOGGLE_ACTIVE_COLUMN:

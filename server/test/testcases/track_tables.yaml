@@ -16,3 +16,20 @@ query:
       args:
         schema: public
         name: person
+    - type: track_table
+      args:
+        schema: public
+        name: dollar$test
+    - type: track_table
+      args:
+        schema: public
+        name: address
+    - type: track_table
+      args:
+        schema: public
+        name: orders
+    - type: track_table
+      args:
+        schema: public
+        name: test_table
+

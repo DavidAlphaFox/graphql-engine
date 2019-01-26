@@ -3,6 +3,12 @@
   padding: 0;
 }
 
+.migration_disclaimer {
+  font-size: 12px;
+  margin-left: 10px;
+  margin-top: 10px;
+  color: rgb(236, 61, 61);
+}
 .tableContainer {
   overflow: auto;
   //margin-top: 25px;
@@ -13,10 +19,22 @@
   width: 100%;
   .schemaSidebarSection {
     display: inline-block;
-    width: 40%;
+    width: 100%;
+    padding-left: 15px;
+    a
+    {
+      display: inline-block !important;
+      font-weight: bold;
+    }
   }
 }
-
+.changeSchema
+{
+  width: 50%;
+  margin-left: 10px;
+  display: inline-block;
+  font-weight: bold;
+}
 .aceBlock {
   max-height: 300px;
   position: relative;
@@ -104,7 +122,7 @@ a.expanded {
 }
 .addCol {
   .input {
-    width: 250px;
+    width: 300px;
     display: inline-block;
   }
   .inputCheckbox {
@@ -126,8 +144,15 @@ a.expanded {
   }
   .select {
     display: inline-block;
-    width: 120px;
+    width: 300px;
     height: 34px;
+  }
+  .selectWidth {
+    width: 200px;
+  }
+  .defaultWidth {
+    width: 200px;
+    margin-right: 0px;
   }
   i:hover {
     cursor: pointer;
@@ -162,10 +187,6 @@ a.expanded {
   padding-bottom: 30px;
 }
 
-.commentText {
-  display: inline-block;
-}
-
 .dataBreadCrumb {
   padding-bottom: 10px;
 }
@@ -177,4 +198,9 @@ a.expanded {
 .tableCellCenterAlignedExpanded {
   text-align: center;
   white-space: normal;
+}
+
+.sidebarMigration {
+  display: block !important;
+  clear: both !important;
 }

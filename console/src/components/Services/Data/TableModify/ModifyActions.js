@@ -5,6 +5,7 @@ import {
   handleMigrationErrors,
   makeMigrationCall,
   LOAD_UNTRACKED_RELATIONS,
+  fetchTableComment,
 } from '../DataActions';
 import _push from '../push';
 import { SET_SQL } from '../RawSQL/Actions';
@@ -22,6 +23,8 @@ const RESET = 'ModifyTable/RESET';
 const VIEW_DEF_REQUEST_SUCCESS = 'ModifyTable/VIEW_DEF_REQUEST_SUCCESS';
 const VIEW_DEF_REQUEST_ERROR = 'ModifyTable/VIEW_DEF_REQUEST_ERROR';
 
+const TABLE_COMMENT_EDIT = 'ModifyTable/TABLE_COMMENT_EDIT';
+const TABLE_COMMENT_INPUT_EDIT = 'ModifyTable/TABLE_COMMENT_INPUT_EDIT';
 const FK_SET_REF_TABLE = 'ModifyTable/FK_SET_REF_TABLE';
 const FK_SET_L_COL = 'ModifyTable/FK_SET_L_COL';
 const FK_SET_R_COL = 'ModifyTable/FK_SET_R_COL';
@@ -36,7 +39,7 @@ const deleteTableSql = tableName => {
     const currentSchema = getState().tables.currentSchema;
     // handle no primary key
     const sqlDropTable =
-      'DROP TABLE ' + currentSchema + '.' + '"' + tableName + '"';
+      'DROP TABLE ' + '"' + currentSchema + '"' + '.' + '"' + tableName + '"';
     const sqlUpQueries = [
       {
         type: 'run_sql',
@@ -181,7 +184,9 @@ const fetchViewDefinition = (viewName, isRedirect) => {
 
         const runSqlDef =
           'CREATE OR REPLACE VIEW ' +
+          '"' +
           currentSchema +
+          '"' +
           '.' +
           '"' +
           viewName +
@@ -208,7 +213,7 @@ const deleteViewSql = viewName => {
   return (dispatch, getState) => {
     const currentSchema = getState().tables.currentSchema;
     const sqlDropView =
-      'DROP VIEW ' + currentSchema + '.' + '"' + viewName + '"';
+      'DROP VIEW ' + '"' + currentSchema + '"' + '.' + '"' + viewName + '"';
     const sqlUpQueries = [
       {
         type: 'run_sql',
@@ -255,7 +260,9 @@ const deleteColumnSql = (tableName, colName) => {
     const currentSchema = getState().tables.currentSchema;
     const deleteQueryUp =
       'ALTER TABLE ' +
+      '"' +
       currentSchema +
+      '"' +
       '.' +
       '"' +
       tableName +
@@ -333,7 +340,9 @@ const addColSql = (
     const currentSchema = getState().tables.currentSchema;
     let runSqlQueryUp =
       'ALTER TABLE ' +
+      '"' +
       currentSchema +
+      '"' +
       '.' +
       '"' +
       tableName +
@@ -377,7 +386,9 @@ const addColSql = (
     });
     const runSqlQueryDown =
       'ALTER TABLE ' +
+      '"' +
       currentSchema +
+      '"' +
       '.' +
       '"' +
       tableName +
@@ -431,6 +442,14 @@ const addColSql = (
 // TABLE FOREIGN KEYS
 const fkRefTableChange = refTable => ({ type: FK_SET_REF_TABLE, refTable });
 const fkReset = () => ({ type: FK_RESET });
+const activateCommentEdit = (isEnabled, value) => ({
+  type: TABLE_COMMENT_EDIT,
+  data: { enabled: isEnabled, value: value },
+});
+const updateCommentInput = value => ({
+  type: TABLE_COMMENT_INPUT_EDIT,
+  value: value,
+});
 const fkLColChange = lcol => ({ type: FK_SET_L_COL, lcol });
 const fkRColChange = rcol => ({ type: FK_SET_R_COL, rcol });
 const fkAddPair = (lcol, rcol) => ({ type: FK_ADD_PAIR, lcol, rcol });
@@ -441,7 +460,9 @@ const deleteConstraintSql = (tableName, cName) => {
     const currentSchema = getState().tables.currentSchema;
     const dropContraintQuery =
       'ALTER TABLE ' +
+      '"' +
       currentSchema +
+      '"' +
       '.' +
       '"' +
       tableName +
@@ -531,11 +552,21 @@ const addFkSql = (tableName, isInsideEdit) => {
 
     // ALTER TABLE <table> ADD FOREIGN KEY (my_field) REFERENCES <foreign_table>;
     let fkUpQuery =
-      'ALTER TABLE ' + currentSchema + '.' + '"' + tableName + '"' + ' ';
+      'ALTER TABLE ' +
+      '"' +
+      currentSchema +
+      '"' +
+      '.' +
+      '"' +
+      tableName +
+      '"' +
+      ' ';
     fkUpQuery += 'ADD FOREIGN KEY (' + '"' + state.lcol + '"' + ') ';
     fkUpQuery +=
       'REFERENCES ' +
+      '"' +
       currentSchema +
+      '"' +
       '.' +
       '"' +
       state.refTable +
@@ -548,7 +579,15 @@ const addFkSql = (tableName, isInsideEdit) => {
     // fkQuery += 'ON UPDATE ' + onUpdate + ' ';
     // fkQuery += 'ON DELETE ' + onDelete + ' ';
     let fkDownQuery =
-      'ALTER TABLE ' + currentSchema + '.' + '"' + tableName + '"' + ' ';
+      'ALTER TABLE ' +
+      '"' +
+      currentSchema +
+      '"' +
+      '.' +
+      '"' +
+      tableName +
+      '"' +
+      ' ';
     fkDownQuery +=
       'DROP CONSTRAINT ' + '"' + tableName + '_' + state.lcol + '_fkey' + '"';
     const schemaChangesUp = [
@@ -598,6 +637,80 @@ const addFkSql = (tableName, isInsideEdit) => {
   };
 };
 
+const saveTableCommentSql = isTable => {
+  return (dispatch, getState) => {
+    let updatedComment = getState().tables.modify.tableCommentEdit.editedValue;
+    if (!updatedComment) {
+      updatedComment = '';
+    }
+    const currentSchema = getState().tables.currentSchema;
+    const tableName = getState().tables.currentTable;
+
+    const commentQueryBase =
+      'COMMENT ON ' +
+      (isTable ? 'TABLE' : 'VIEW') +
+      ' ' +
+      '"' +
+      currentSchema +
+      '"' +
+      '.' +
+      '"' +
+      tableName +
+      '"' +
+      ' IS ';
+    const commentUpQuery =
+      updatedComment === ''
+        ? commentQueryBase + 'NULL'
+        : commentQueryBase + "'" + updatedComment + "'";
+
+    const commentDownQuery = commentQueryBase + 'NULL';
+    const schemaChangesUp = [
+      {
+        type: 'run_sql',
+        args: {
+          sql: commentUpQuery,
+        },
+      },
+    ];
+    const schemaChangesDown = [
+      {
+        type: 'run_sql',
+        args: {
+          sql: commentDownQuery,
+        },
+      },
+    ];
+
+    // Apply migrations
+    const migrationName =
+      'alter_table_' + currentSchema + '_' + tableName + '_update_comment';
+
+    const requestMsg = 'Updating Comment...';
+    const successMsg = 'Comment Updated';
+    const errorMsg = 'Updating comment failed';
+
+    const customOnSuccess = () => {
+      dispatch(fetchTableComment(tableName)).then(() => {
+        dispatch(activateCommentEdit(false, null));
+      });
+    };
+    const customOnError = () => {};
+
+    makeMigrationCall(
+      dispatch,
+      getState,
+      schemaChangesUp,
+      schemaChangesDown,
+      migrationName,
+      customOnSuccess,
+      customOnError,
+      requestMsg,
+      successMsg,
+      errorMsg
+    );
+  };
+};
+
 const isColumnUnique = (tableSchema, colName) => {
   return (
     tableSchema.unique_constraints.filter(constraint =>
@@ -613,6 +726,7 @@ const saveColumnChangesSql = (
   nullable,
   unique,
   def,
+  comment,
   column
 ) => {
   // eslint-disable-line no-unused-vars
@@ -625,9 +739,14 @@ const saveColumnChangesSql = (
     } else {
       defWithQuotes = def;
     }
+    let currentColumnComment = getState().tables.columnComment;
+    currentColumnComment = currentColumnComment
+      ? currentColumnComment.result[1]
+      : null;
     // check if column type has changed before making it part of the migration
     const originalColType = column.data_type; // "value"
     const originalColDefault = column.column_default; // null or "value"
+    const originalColComment = currentColumnComment; // null or "value"
     const originalColNullable = column.is_nullable; // "YES" or "NO"
     const originalColUnique = isColumnUnique(
       getState().tables.allSchemas.find(
@@ -639,7 +758,9 @@ const saveColumnChangesSql = (
     /* column type up/down migration */
     const columnChangesUpQuery =
       'ALTER TABLE ' +
+      '"' +
       currentSchema +
+      '"' +
       '.' +
       '"' +
       tableName +
@@ -653,7 +774,9 @@ const saveColumnChangesSql = (
       ';';
     const columnChangesDownQuery =
       'ALTER TABLE ' +
+      '"' +
       currentSchema +
+      '"' +
       '.' +
       '"' +
       tableName +
@@ -693,7 +816,9 @@ const saveColumnChangesSql = (
       // ALTER TABLE ONLY <table> ALTER COLUMN <column> SET DEFAULT <default>;
       const columnDefaultUpQuery =
         'ALTER TABLE ONLY ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -707,7 +832,9 @@ const saveColumnChangesSql = (
         ';';
       let columnDefaultDownQuery =
         'ALTER TABLE ONLY ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -725,7 +852,9 @@ const saveColumnChangesSql = (
         // default value unchanged
         columnDefaultDownQuery =
           'ALTER TABLE ONLY ' +
+          '"' +
           currentSchema +
+          '"' +
           '.' +
           '"' +
           tableName +
@@ -744,7 +873,9 @@ const saveColumnChangesSql = (
         // default value has changed
         columnDefaultDownQuery =
           'ALTER TABLE ONLY ' +
+          '"' +
           currentSchema +
+          '"' +
           '.' +
           '"' +
           tableName +
@@ -760,7 +891,9 @@ const saveColumnChangesSql = (
         // there was no default value originally. so drop default.
         columnDefaultDownQuery =
           'ALTER TABLE ONLY ' +
+          '"' +
           currentSchema +
+          '"' +
           '.' +
           '"' +
           tableName +
@@ -791,7 +924,9 @@ const saveColumnChangesSql = (
       // ALTER TABLE <table> ALTER COLUMN <column> DROP DEFAULT;
       const columnDefaultUpQuery =
         'ALTER TABLE ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -804,7 +939,9 @@ const saveColumnChangesSql = (
       if (column.column_default !== null) {
         const columnDefaultDownQuery =
           'ALTER TABLE ' +
+          '"' +
           currentSchema +
+          '"' +
           '.' +
           '"' +
           tableName +
@@ -839,7 +976,9 @@ const saveColumnChangesSql = (
       // ALTER TABLE <table> ALTER COLUMN <column> DROP NOT NULL;
       const nullableUpQuery =
         'ALTER TABLE ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -851,7 +990,9 @@ const saveColumnChangesSql = (
         ' DROP NOT NULL;';
       const nullableDownQuery =
         'ALTER TABLE ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -880,7 +1021,9 @@ const saveColumnChangesSql = (
       // ALTER TABLE <table> ALTER COLUMN <column> SET NOT NULL;
       const nullableUpQuery =
         'ALTER TABLE ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -892,7 +1035,9 @@ const saveColumnChangesSql = (
         ' SET NOT NULL;';
       const nullableDownQuery =
         'ALTER TABLE ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -923,7 +1068,9 @@ const saveColumnChangesSql = (
     if (unique === 'true') {
       const uniqueUpQuery =
         'ALTER TABLE ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -940,7 +1087,9 @@ const saveColumnChangesSql = (
         '")';
       const uniqueDownQuery =
         'ALTER TABLE ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -969,7 +1118,9 @@ const saveColumnChangesSql = (
     } else {
       const uniqueDownQuery =
         'ALTER TABLE ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -986,7 +1137,9 @@ const saveColumnChangesSql = (
         '")';
       const uniqueUpQuery =
         'ALTER TABLE ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -1012,6 +1165,61 @@ const saveColumnChangesSql = (
           },
         });
       }
+    }
+
+    /* column comment up/down migration */
+    const columnCommentUpQuery =
+      'COMMENT ON COLUMN ' +
+      '"' +
+      currentSchema +
+      '"' +
+      '.' +
+      '"' +
+      tableName +
+      '"' +
+      '.' +
+      '"' +
+      colName +
+      '"' +
+      ' IS ' +
+      "'" +
+      comment +
+      "'";
+    const columnCommentDownQuery =
+      'COMMENT ON COLUMN ' +
+      '"' +
+      currentSchema +
+      '"' +
+      '.' +
+      '"' +
+      tableName +
+      '"' +
+      '.' +
+      '"' +
+      colName +
+      '"' +
+      ' IS ' +
+      "'" +
+      originalColComment +
+      "'";
+
+    // check if comment is unchanged and then do an update. if not skip
+    if (
+      (originalColComment !== undefined && originalColComment[0]) !==
+      comment.trim()
+    ) {
+      schemaChangesUp.push({
+        type: 'run_sql',
+        args: {
+          sql: columnCommentUpQuery,
+        },
+      });
+      schemaChangesDown.push({
+        type: 'run_sql',
+        args: {
+          sql: columnCommentDownQuery,
+        },
+      });
     }
 
     // Apply migrations
@@ -1060,6 +1268,7 @@ const saveColChangesWithFkSql = (
   nullable,
   unique,
   def,
+  comment,
   column
 ) => {
   // ALTER TABLE <table> ALTER COLUMN <column> TYPE <column_type>;
@@ -1072,9 +1281,14 @@ const saveColChangesWithFkSql = (
   }
   return (dispatch, getState) => {
     const currentSchema = getState().tables.currentSchema;
+    let currentColumnComment = getState().tables.columnComment;
+    currentColumnComment = currentColumnComment
+      ? currentColumnComment.result[1]
+      : null;
     // check if column type has changed before making it part of the migration
     const originalColType = column.data_type; // "value"
     const originalColDefault = column.column_default; // null or "value"
+    const originalColComment = currentColumnComment; // null or "value"
     const originalColNullable = column.is_nullable; // "YES" or "NO"
     const originalColUnique = isColumnUnique(
       getState().tables.allSchemas.find(
@@ -1086,7 +1300,9 @@ const saveColChangesWithFkSql = (
     /* column type up/down migration */
     const columnChangesUpQuery =
       'ALTER TABLE ' +
+      '"' +
       currentSchema +
+      '"' +
       '.' +
       '"' +
       tableName +
@@ -1100,7 +1316,9 @@ const saveColChangesWithFkSql = (
       ';';
     const columnChangesDownQuery =
       'ALTER TABLE ' +
+      '"' +
       currentSchema +
+      '"' +
       '.' +
       '"' +
       tableName +
@@ -1140,7 +1358,9 @@ const saveColChangesWithFkSql = (
       // ALTER TABLE ONLY <table> ALTER COLUMN <column> SET DEFAULT <default>;
       const columnDefaultUpQuery =
         'ALTER TABLE ONLY ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -1154,7 +1374,9 @@ const saveColChangesWithFkSql = (
         ';';
       let columnDefaultDownQuery =
         'ALTER TABLE ONLY ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -1172,7 +1394,9 @@ const saveColChangesWithFkSql = (
         // default value unchanged
         columnDefaultDownQuery =
           'ALTER TABLE ONLY ' +
+          '"' +
           currentSchema +
+          '"' +
           '.' +
           '"' +
           tableName +
@@ -1191,7 +1415,9 @@ const saveColChangesWithFkSql = (
         // default value has changed
         columnDefaultDownQuery =
           'ALTER TABLE ONLY ' +
+          '"' +
           currentSchema +
+          '"' +
           '.' +
           '"' +
           tableName +
@@ -1207,7 +1433,9 @@ const saveColChangesWithFkSql = (
         // there was no default value originally. so drop default.
         columnDefaultDownQuery =
           'ALTER TABLE ONLY ' +
+          '"' +
           currentSchema +
+          '"' +
           '.' +
           '"' +
           tableName +
@@ -1248,7 +1476,9 @@ const saveColChangesWithFkSql = (
       // ALTER TABLE <table> ALTER COLUMN <column> DROP DEFAULT;
       const columnDefaultUpQuery =
         'ALTER TABLE ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -1261,7 +1491,9 @@ const saveColChangesWithFkSql = (
       if (column.column_default !== null) {
         const columnDefaultDownQuery =
           'ALTER TABLE ' +
+          '"' +
           currentSchema +
+          '"' +
           '.' +
           '"' +
           tableName +
@@ -1296,7 +1528,9 @@ const saveColChangesWithFkSql = (
       // ALTER TABLE <table> ALTER COLUMN <column> DROP NOT NULL;
       const nullableUpQuery =
         'ALTER TABLE ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -1308,7 +1542,9 @@ const saveColChangesWithFkSql = (
         ' DROP NOT NULL;';
       const nullableDownQuery =
         'ALTER TABLE ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -1337,7 +1573,9 @@ const saveColChangesWithFkSql = (
       // ALTER TABLE <table> ALTER COLUMN <column> SET NOT NULL;
       const nullableUpQuery =
         'ALTER TABLE ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -1349,7 +1587,9 @@ const saveColChangesWithFkSql = (
         ' SET NOT NULL;';
       const nullableDownQuery =
         'ALTER TABLE ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -1380,7 +1620,9 @@ const saveColChangesWithFkSql = (
     if (unique === 'true') {
       const uniqueUpQuery =
         'ALTER TABLE ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -1397,7 +1639,9 @@ const saveColChangesWithFkSql = (
         '")';
       const uniqueDownQuery =
         'ALTER TABLE ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -1426,7 +1670,9 @@ const saveColChangesWithFkSql = (
     } else {
       const uniqueDownQuery =
         'ALTER TABLE ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -1443,7 +1689,9 @@ const saveColChangesWithFkSql = (
         '")';
       const uniqueUpQuery =
         'ALTER TABLE ' +
+        '"' +
         currentSchema +
+        '"' +
         '.' +
         '"' +
         tableName +
@@ -1466,6 +1714,59 @@ const saveColChangesWithFkSql = (
           type: 'run_sql',
           args: {
             sql: uniqueDownQuery,
+          },
+        });
+      }
+    }
+    /* column comment up/down migration */
+    if (comment.trim() !== '') {
+      const columnCommentUpQuery =
+        'COMMENT ON COLUMN ' +
+        '"' +
+        currentSchema +
+        '"' +
+        '.' +
+        '"' +
+        tableName +
+        '"' +
+        '.' +
+        '"' +
+        colName +
+        '"' +
+        ' IS ' +
+        "'" +
+        comment +
+        "'";
+      const columnCommentDownQuery =
+        'COMMENT ON COLUMN ' +
+        '"' +
+        currentSchema +
+        '"' +
+        '.' +
+        '"' +
+        tableName +
+        '"' +
+        '.' +
+        '"' +
+        colName +
+        '"' +
+        ' IS ' +
+        "'" +
+        originalColComment +
+        "'";
+
+      // check if comment is unchanged and then do an update. if not skip
+      if (originalColComment !== comment.trim()) {
+        schemaChangesUp.push({
+          type: 'run_sql',
+          args: {
+            sql: columnCommentUpQuery,
+          },
+        });
+        schemaChangesDown.push({
+          type: 'run_sql',
+          args: {
+            sql: columnCommentDownQuery,
           },
         });
       }
@@ -1522,6 +1823,8 @@ export {
   FK_ADD_FORM_ERROR,
   FK_RESET,
   TOGGLE_FK_CHECKBOX,
+  TABLE_COMMENT_EDIT,
+  TABLE_COMMENT_INPUT_EDIT,
   fetchViewDefinition,
   handleMigrationErrors,
   saveColumnChangesSql,
@@ -1539,4 +1842,7 @@ export {
   fkAddPair,
   toggleFKCheckBox,
   isColumnUnique,
+  activateCommentEdit,
+  updateCommentInput,
+  saveTableCommentSql,
 };

@@ -1,20 +1,24 @@
-{-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE MultiWayIf        #-}
-{-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE OverloadedStrings #-}
-
 module Hasura.GraphQL.Resolve.Context
   ( FieldMap
-  , OrdByResolveCtx
-  , OrdByResolveCtxElem
-  , NullsOrder(..)
-  , OrdTy(..)
+  , RelationInfoMap
+  , FuncArgItem(..)
+  , FuncArgCtx
+  , OrdByCtx
+  , OrdByItemMap
+  , OrdByItem(..)
+  , UpdPermForIns
+  , InsCtx(..)
+  , InsCtxMap
   , RespTx
+  , LazyRespTx
+  , PrepFn
+  , InsertTxConflictCtx(..)
   , getFldInfo
   , getPGColInfo
   , getArg
   , withArg
   , withArgM
+  , nameAsPath
   , PrepArgs
   , Convert
   , runConvert
@@ -25,11 +29,16 @@ module Hasura.GraphQL.Resolve.Context
 import           Data.Has
 import           Hasura.Prelude
 
-import qualified Data.ByteString.Lazy          as BL
-import qualified Data.HashMap.Strict           as Map
-import qualified Data.Sequence                 as Seq
-import qualified Database.PG.Query             as Q
-import qualified Language.GraphQL.Draft.Syntax as G
+import qualified Data.Aeson                          as J
+import qualified Data.Aeson.Casing                   as J
+import qualified Data.Aeson.TH                       as J
+import qualified Data.ByteString.Lazy                as BL
+import qualified Data.HashMap.Strict                 as Map
+import qualified Data.Sequence                       as Seq
+import qualified Database.PG.Query                   as Q
+import qualified Language.GraphQL.Draft.Syntax       as G
+
+import           Hasura.GraphQL.Resolve.ContextTypes
 
 import           Hasura.GraphQL.Utils
 import           Hasura.GraphQL.Validate.Field
@@ -38,32 +47,24 @@ import           Hasura.RQL.Types
 import           Hasura.SQL.Types
 import           Hasura.SQL.Value
 
-import qualified Hasura.SQL.DML                as S
+import qualified Hasura.SQL.DML                      as S
 
-type FieldMap
-  = Map.HashMap (G.NamedType, G.Name) (Either PGColInfo (RelInfo, S.BoolExp))
-
-data OrdTy
-  = OAsc
-  | ODesc
-  deriving (Show, Eq)
-
-data NullsOrder
-  = NFirst
-  | NLast
-  deriving (Show, Eq)
+data InsResp
+  = InsResp
+  { _irAffectedRows :: !Int
+  , _irResponse     :: !(Maybe J.Object)
+  } deriving (Show, Eq)
+$(J.deriveJSON (J.aesonDrop 3 J.snakeCase) ''InsResp)
 
 type RespTx = Q.TxE QErr BL.ByteString
 
--- context needed for sql generation
-type OrdByResolveCtxElem = (PGColInfo, OrdTy, NullsOrder)
-
-type OrdByResolveCtx
-  = Map.HashMap (G.NamedType, G.EnumValue) OrdByResolveCtxElem
+type LazyRespTx = LazyTx QErr BL.ByteString
+type PrepFn m = (PGColType, PGColValue) -> m S.SQLExp
 
 getFldInfo
   :: (MonadError QErr m, MonadReader r m, Has FieldMap r)
-  => G.NamedType -> G.Name -> m (Either PGColInfo (RelInfo, S.BoolExp))
+  => G.NamedType -> G.Name
+  -> m (Either PGColInfo (RelInfo, Bool, AnnBoolExpSQL, Maybe Int))
 getFldInfo nt n = do
   fldMap <- asks getter
   onNothing (Map.lookup (nt,n) fldMap) $
@@ -90,13 +91,23 @@ getArg args arg =
   onNothing (Map.lookup arg args) $
   throw500 $ "missing argument: " <> showName arg
 
+prependArgsInPath
+  :: (MonadError QErr m)
+  => m a -> m a
+prependArgsInPath = withPathK "args"
+
+nameAsPath
+  :: (MonadError QErr m)
+  => G.Name -> m a -> m a
+nameAsPath name = withPathK (G.unName name)
+
 withArg
   :: (MonadError QErr m)
   => ArgsMap
   -> G.Name
   -> (AnnGValue -> m a)
   -> m a
-withArg args arg f =
+withArg args arg f = prependArgsInPath $ nameAsPath arg $
   getArg args arg >>= f
 
 withArgM
@@ -105,17 +116,18 @@ withArgM
   -> G.Name
   -> (AnnGValue -> m a)
   -> m (Maybe a)
-withArgM args arg f =
-  mapM f $ Map.lookup arg args
+withArgM args arg f = prependArgsInPath $ nameAsPath arg $
+  mapM f $ handleNull =<< Map.lookup arg args
+  where
+    handleNull v = bool (Just v) Nothing $ hasNullVal v
 
 type PrepArgs = Seq.Seq Q.PrepArg
 
 type Convert =
-  StateT PrepArgs (ReaderT (FieldMap, OrdByResolveCtx) (Except QErr))
+  StateT PrepArgs (ReaderT (FieldMap, OrdByCtx, InsCtxMap, FuncArgCtx) (Except QErr))
 
 prepare
-  :: (MonadState PrepArgs m)
-  => (PGColType, PGColValue) -> m S.SQLExp
+  :: (MonadState PrepArgs m) => PrepFn m
 prepare (colTy, colVal) = do
   preparedArgs <- get
   put (preparedArgs Seq.|> binEncoder colVal)
@@ -123,7 +135,7 @@ prepare (colTy, colVal) = do
 
 runConvert
   :: (MonadError QErr m)
-  => (FieldMap, OrdByResolveCtx) -> Convert a -> m (a, PrepArgs)
+  => (FieldMap, OrdByCtx, InsCtxMap, FuncArgCtx) -> Convert a -> m (a, PrepArgs)
 runConvert ctx m =
   either throwError return $
   runExcept $ runReaderT (runStateT m Seq.empty) ctx
