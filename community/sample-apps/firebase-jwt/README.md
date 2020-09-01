@@ -48,11 +48,11 @@ Deploy Hasura GraphQL Engine on Heroku:
 After deploying, add the following environment variables to configure JWT mode:
 
 ```
-HASURA_GRAPHQL_ACCESS_KEY : yoursecretaccesskey
+HASURA_GRAPHQL_ADMIN_SECRET : youradminsecretkey
 ```
 
 ```
-HASURA_GRAPHQL_JWT_SECRET: {"type":"RS512", "jwk_url": "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com"}
+HASURA_GRAPHQL_JWT_SECRET: {"type":"RS256", "jwk_url": "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com", "audience": "<firebase-project-id>", "issuer": "https://securetoken.google.com/<firebase-project-id>"}
 ```
 
 ## Sending JWT to Hasura

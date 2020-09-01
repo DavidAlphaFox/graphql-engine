@@ -1,118 +1,31 @@
 module Hasura.RQL.Types.Permission
-       ( RoleName(..)
-       , UserId(..)
+  ( PermType(..)
+  , permTypeToCode
+  , PermId(..)
+  ) where
 
-       , UserVars
-       , mkUserVars
-       , isUserVar
-       , getVarNames
-       , getVarVal
-       , roleFromVars
-
-       , UserInfo
-       , userRole
-       , userVars
-       , mkUserInfo
-       , userInfoToList
-       , adminUserInfo
-       , adminRole
-       , isAdmin
-       , PermType(..)
-       , permTypeToCode
-       , PermId(..)
-       ) where
-
+import           Hasura.Incremental         (Cacheable)
 import           Hasura.Prelude
-import           Hasura.Server.Utils        (accessKeyHeader, userRoleHeader)
+import           Hasura.Session
 import           Hasura.SQL.Types
-
-import qualified Database.PG.Query          as Q
 
 import           Data.Aeson
 import           Data.Hashable
 import           Instances.TH.Lift          ()
 import           Language.Haskell.TH.Syntax (Lift)
 
-import qualified Data.HashMap.Strict        as Map
 import qualified Data.Text                  as T
+import qualified Database.PG.Query          as Q
 import qualified PostgreSQL.Binary.Decoding as PD
-
-newtype RoleName
-  = RoleName {getRoleTxt :: T.Text}
-  deriving ( Show, Eq, Hashable, FromJSONKey, ToJSONKey, FromJSON
-           , ToJSON, Q.FromCol, Q.ToPrepArg, Lift)
-
-instance DQuote RoleName where
-  dquoteTxt (RoleName r) = r
-
-adminRole :: RoleName
-adminRole = RoleName "admin"
-
-isAdmin :: RoleName -> Bool
-isAdmin = (adminRole ==)
-
-newtype UserId = UserId { getUserId :: Word64 }
-  deriving (Show, Eq, FromJSON, ToJSON)
-
-newtype UserVars
-  = UserVars { unUserVars :: Map.HashMap T.Text T.Text }
-  deriving (Show, Eq, FromJSON, ToJSON, Hashable)
-
-isUserVar :: T.Text -> Bool
-isUserVar = T.isPrefixOf "x-hasura-" . T.toLower
-
-roleFromVars :: UserVars -> Maybe RoleName
-roleFromVars =
-  fmap RoleName . getVarVal userRoleHeader
-
-getVarVal :: Text -> UserVars -> Maybe Text
-getVarVal k =
-  Map.lookup k . unUserVars
-
-getVarNames :: UserVars -> [T.Text]
-getVarNames =
-  Map.keys . unUserVars
-
-mkUserVars :: [(T.Text, T.Text)] -> UserVars
-mkUserVars l =
-  UserVars $ Map.fromList
-  [ (T.toLower k, v)
-  | (k, v) <- l, isUserVar k
-  ]
-
-data UserInfo
-  = UserInfo
-  { userRole :: !RoleName
-  , userVars :: !UserVars
-  } deriving (Show, Eq, Generic)
-
-mkUserInfo :: RoleName -> UserVars -> UserInfo
-mkUserInfo rn (UserVars v) =
-  UserInfo rn $ UserVars $ Map.insert userRoleHeader (getRoleTxt rn) $
-  Map.delete accessKeyHeader v
-
-instance Hashable UserInfo
-
--- $(J.deriveToJSON (J.aesonDrop 4 J.camelCase){J.omitNothingFields=True}
---   ''UserInfo
---  )
-
-userInfoToList :: UserInfo -> [(Text, Text)]
-userInfoToList userInfo =
-  let vars = Map.toList $ unUserVars . userVars $ userInfo
-      rn = getRoleTxt . userRole $ userInfo
-  in (userRoleHeader, rn) : vars
-
-adminUserInfo :: UserInfo
-adminUserInfo =
-  mkUserInfo adminRole $ mkUserVars []
 
 data PermType
   = PTInsert
   | PTSelect
   | PTUpdate
   | PTDelete
-  deriving (Eq, Lift)
+  deriving (Eq, Lift, Generic)
+instance NFData PermType
+instance Cacheable PermType
 
 instance Q.FromCol PermType where
   fromCol bs = flip Q.fromColHelper bs $ PD.enum $ \case
@@ -160,7 +73,7 @@ instance Show PermId where
     show $ mconcat
     [ getTableTxt tn
     , "."
-    , getRoleTxt rn
+    , roleNameToTxt rn
     , "."
     , T.pack $ show pType
     ]

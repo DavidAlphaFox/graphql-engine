@@ -1,55 +1,31 @@
 module Hasura.GraphQL.Utils
-  ( onNothing
-  , showName
-  , showNamedTy
-  , throwVE
-  , getBaseTy
-  , mapFromL
+  ( showName
   , groupTuples
   , groupListWith
   , mkMapWith
-  , onLeft
   , showNames
-  , isValidName
-  , onJust
+  , simpleGraphQLQuery
+  , getBaseTyWithNestedLevelsCount
   ) where
 
 import           Hasura.Prelude
-import           Hasura.RQL.Types.Error
 
-import qualified Data.ByteString.Lazy          as LBS
 import qualified Data.HashMap.Strict           as Map
 import qualified Data.List.NonEmpty            as NE
 import qualified Data.Text                     as T
 import qualified Language.GraphQL.Draft.Syntax as G
-import qualified Text.Regex.TDFA               as TDFA
 
 showName :: G.Name -> Text
 showName name = "\"" <> G.unName name <> "\""
 
-onNothing :: (Monad m) => Maybe a -> m a -> m a
-onNothing m act = maybe act return m
-
-onJust :: (Monad m) => Maybe a -> (a -> m ()) -> m ()
-onJust m action = maybe (return ()) action m
-
-throwVE :: (MonadError QErr m) => Text -> m a
-throwVE = throw400 ValidationFailed
-
-showNamedTy :: G.NamedType -> Text
-showNamedTy nt =
-  "'" <> G.showNT nt <> "'"
-
-getBaseTy :: G.GType -> G.NamedType
-getBaseTy = \case
-  G.TypeNamed _ n     -> n
-  G.TypeList _ lt     -> getBaseTyL lt
+getBaseTyWithNestedLevelsCount :: G.GType -> (G.Name, Int)
+getBaseTyWithNestedLevelsCount ty = go ty 0
   where
-    getBaseTyL = getBaseTy . G.unListType
-
-mapFromL :: (Eq k, Hashable k) => (a -> k) -> [a] -> Map.HashMap k a
-mapFromL f l =
-  Map.fromList [(f v, v) | v <- l]
+    go :: G.GType -> Int -> (G.Name, Int)
+    go gType ctr =
+      case gType of
+        G.TypeNamed _ n      -> (n, ctr)
+        G.TypeList  _ gType' -> flip go (ctr + 1) gType'
 
 groupListWith
   :: (Eq k, Hashable k, Foldable t, Functor t)
@@ -79,16 +55,10 @@ mkMapWith f l =
     mapG = groupListWith f l
     dups = Map.keys $ Map.filter ((> 1) . length) mapG
 
-onLeft :: (Monad m) => Either e a -> (e -> m a) -> m a
-onLeft e f = either f return e
-
 showNames :: (Foldable t) => t G.Name -> Text
 showNames names =
   T.intercalate ", " $ map G.unName $ toList names
 
--- Ref: http://facebook.github.io/graphql/June2018/#sec-Names
-isValidName :: G.Name -> Bool
-isValidName =
-  TDFA.match compiledRegex . T.unpack . G.unName
-  where
-    compiledRegex = TDFA.makeRegex ("^[_a-zA-Z][_a-zA-Z0-9]*$" ::LBS.ByteString) :: TDFA.Regex
+-- A simple graphql query to be used in generators
+simpleGraphQLQuery :: Text
+simpleGraphQLQuery = "query {author {id name}}"

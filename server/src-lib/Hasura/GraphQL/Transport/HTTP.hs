@@ -1,155 +1,278 @@
+-- | Execution of GraphQL queries over HTTP transport
+{-# LANGUAGE RecordWildCards #-}
 module Hasura.GraphQL.Transport.HTTP
-  ( runGQ
-  , getTopLevelNodes
-  , gatherTypeLocs
-  , assertSameLocationNodes
-  , runRemoteGQ
+  ( MonadExecuteQuery(..)
+  , runGQ
+  , runGQBatched
+  -- * imported from HTTP.Protocol; required by pro
+  , GQLReq(..)
+  , GQLReqUnparsed
+  , GQLReqParsed
+  , GQLExecDoc(..)
+  , OperationName(..)
+  , GQLQueryText(..)
   ) where
 
-import           Control.Exception                      (try)
-import           Control.Lens
-import           Hasura.Prelude
+import           Control.Monad.Morph                    (hoist)
 
-import qualified Data.ByteString.Lazy                   as BL
-import qualified Data.CaseInsensitive                   as CI
-import qualified Data.HashMap.Strict                    as Map
-import qualified Data.HashSet                           as Set
-import qualified Data.String.Conversions                as CS
-import qualified Data.Text                              as T
-import qualified Database.PG.Query                      as Q
-import qualified Language.GraphQL.Draft.Syntax          as G
-import qualified Network.HTTP.Client                    as HTTP
-import qualified Network.HTTP.Types                     as N
-import qualified Network.Wreq                           as Wreq
-
-import           Hasura.GraphQL.Schema
+import           Hasura.EncJSON
+import           Hasura.GraphQL.Context
+import           Hasura.GraphQL.Logging                 (MonadQueryLog (..))
+import           Hasura.GraphQL.Parser.Column           (UnpreparedValue)
 import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.HTTP
-import           Hasura.RQL.DDL.Headers
+import           Hasura.Prelude
 import           Hasura.RQL.Types
+import           Hasura.Server.Init.Config
+import           Hasura.Server.Utils                    (RequestId)
+import           Hasura.Server.Version                  (HasVersion)
+import           Hasura.Session
+import           Hasura.Tracing                         (MonadTrace, TraceT, trace)
 
-import qualified Hasura.GraphQL.Resolve                 as R
-import qualified Hasura.GraphQL.Validate                as VQ
-import qualified Hasura.GraphQL.Validate.Types          as VT
+import qualified Data.Aeson                             as J
+import qualified Data.Environment                       as Env
+import qualified Data.HashMap.Strict                    as Map
+import qualified Database.PG.Query                      as Q
+import qualified Hasura.GraphQL.Execute                 as E
+import qualified Hasura.GraphQL.Execute.Query           as EQ
+import qualified Hasura.Logging                         as L
+import qualified Hasura.Server.Telemetry.Counters       as Telem
+import qualified Hasura.Tracing                         as Tracing
+import qualified Language.GraphQL.Draft.Syntax          as G
+import qualified Network.HTTP.Types                     as HTTP
+import qualified Network.Wai.Extended                   as Wai
 
 
+class Monad m => MonadExecuteQuery m where
+  executeQuery
+    :: GQLReqParsed
+    -> [QueryRootField UnpreparedValue]
+    -> Maybe EQ.GeneratedSqlMap
+    -> PGExecCtx
+    -> Q.TxAccess
+    -> TraceT (LazyTx QErr) EncJSON
+    -> TraceT (ExceptT QErr m) (HTTP.ResponseHeaders, EncJSON)
+
+instance MonadExecuteQuery m => MonadExecuteQuery (ReaderT r m) where
+  executeQuery a b c d e f = hoist (hoist lift) $ executeQuery a b c d e f
+
+instance MonadExecuteQuery m => MonadExecuteQuery (ExceptT r m) where
+  executeQuery a b c d e f = hoist (hoist lift) $ executeQuery a b c d e f
+
+instance MonadExecuteQuery m => MonadExecuteQuery (TraceT m) where
+  executeQuery a b c d e f = hoist (hoist lift) $ executeQuery a b c d e f
+
+
+-- | Run (execute) a single GraphQL query
 runGQ
-  :: (MonadIO m, MonadError QErr m)
-  => Q.PGPool -> Q.TxIsolation
+  :: ( HasVersion
+     , MonadIO m
+     , MonadError QErr m
+     , MonadReader E.ExecutionCtx m
+     , E.MonadGQLExecutionCheck m
+     , MonadQueryLog m
+     , MonadTrace m
+     , MonadExecuteQuery m
+     )
+  => Env.Environment
+  -> L.Logger L.Hasura
+  -> RequestId
   -> UserInfo
-  -> SchemaCache
-  -> HTTP.Manager
-  -> [N.Header]
-  -> GraphQLRequest
-  -> BL.ByteString -- this can be removed when we have a pretty-printer
-  -> m BL.ByteString
-runGQ pool isoL userInfo sc manager reqHdrs req rawReq = do
+  -> Wai.IpAddress
+  -> [HTTP.Header]
+  -> E.GraphQLQueryType
+  -> GQLReqUnparsed
+  -> m (HttpResponse EncJSON)
+runGQ env logger reqId userInfo ipAddress reqHeaders queryType reqUnparsed = do
+  -- The response and misc telemetry data:
+  let telemTransport = Telem.HTTP
+  (telemTimeTot_DT, (telemCacheHit, telemLocality, (telemTimeIO_DT, telemQueryType, !resp))) <- withElapsedTime $ do
+    E.ExecutionCtx _ sqlGenCtx pgExecCtx {- planCache -} sc scVer httpManager enableAL <- ask
 
-  (gCtx, _) <- flip runStateT sc $ getGCtx (userRole userInfo) gCtxRoleMap
-  queryParts <- flip runReaderT gCtx $ VQ.getQueryParts req
+    -- run system authorization on the GraphQL API
+    reqParsed <- E.checkGQLExecution userInfo (reqHeaders, ipAddress) enableAL sc reqUnparsed
+                 >>= flip onLeft throwError
 
-  let opDef = VQ.qpOpDef queryParts
-      topLevelNodes = getTopLevelNodes opDef
-      -- gather TypeLoc of topLevelNodes
-      typeLocs = gatherTypeLocs gCtx topLevelNodes
-
-  -- see if they are all the same
-  assertSameLocationNodes typeLocs
-
-  case typeLocs of
-    [] -> runHasuraGQ pool isoL userInfo sc queryParts
-
-    (typeLoc:_) -> case typeLoc of
-      VT.HasuraType ->
-        runHasuraGQ pool isoL userInfo sc queryParts
-      VT.RemoteType _ rsi ->
-        runRemoteGQ manager userInfo reqHdrs rawReq rsi opDef
+    (telemCacheHit, execPlan) <- E.getResolvedExecPlan env logger pgExecCtx {- planCache -}
+                                 userInfo sqlGenCtx sc scVer queryType
+                                 httpManager reqHeaders (reqUnparsed, reqParsed)
+    case execPlan of
+      E.QueryExecutionPlan queryPlan asts ->
+        case queryPlan of
+          E.ExecStepDB txGenSql -> do
+            (telemTimeIO, telemQueryType, respHdrs, resp) <-
+              runQueryDB reqId (reqUnparsed,reqParsed) asts userInfo txGenSql
+            return (telemCacheHit, Telem.Local, (telemTimeIO, telemQueryType, HttpResponse resp respHdrs))
+          E.ExecStepRemote (rsi, opDef, _varValsM) ->
+            runRemoteGQ telemCacheHit rsi opDef
+          E.ExecStepRaw (name, json) -> do
+            (telemTimeIO, obj) <- withElapsedTime $
+              return $ encJFromJValue $ J.Object $ Map.singleton (G.unName name) json
+            return (telemCacheHit, Telem.Local, (telemTimeIO, Telem.Query, HttpResponse obj []))
+      E.MutationExecutionPlan mutationPlan ->
+        case mutationPlan of
+          E.ExecStepDB (tx, responseHeaders) -> do
+            (telemTimeIO, telemQueryType, resp) <- runMutationDB reqId reqUnparsed userInfo tx
+            return (telemCacheHit, Telem.Local, (telemTimeIO, telemQueryType, HttpResponse resp responseHeaders))
+          E.ExecStepRemote (rsi, opDef, _varValsM) ->
+            runRemoteGQ telemCacheHit rsi opDef
+          E.ExecStepRaw (name, json) -> do
+            (telemTimeIO, obj) <- withElapsedTime $
+              return $ encJFromJValue $ J.Object $ Map.singleton (G.unName name) json
+            return (telemCacheHit, Telem.Local, (telemTimeIO, Telem.Query, HttpResponse obj []))
+      E.SubscriptionExecutionPlan _sub ->
+        throw400 UnexpectedPayload "subscriptions are not supported over HTTP, use websockets instead"
+{-
+      E.GExPHasura resolvedOp -> do
+        (telemTimeIO, telemQueryType, respHdrs, resp) <- runHasuraGQ reqId (reqUnparsed, reqParsed) userInfo resolvedOp
+        return (telemCacheHit, Telem.Local, (telemTimeIO, telemQueryType, HttpResponse resp respHdrs))
+      E.GExPRemote rsi opDef  -> do
+        let telemQueryType | G._todType opDef == G.OperationTypeMutation = Telem.Mutation
+                           | otherwise = Telem.Query
+        (telemTimeIO, resp) <- E.execRemoteGQ reqId userInfo reqHeaders reqUnparsed rsi $ G._todType opDef
+        return (telemCacheHit, Telem.Remote, (telemTimeIO, telemQueryType, resp))
+-}
+  let telemTimeIO = convertDuration telemTimeIO_DT
+      telemTimeTot = convertDuration telemTimeTot_DT
+  Telem.recordTimingMetric Telem.RequestDimensions{..} Telem.RequestTimings{..}
+  return resp
   where
-    gCtxRoleMap = scGCtxMap sc
+    runRemoteGQ telemCacheHit rsi opDef = do
+      let telemQueryType | G._todType opDef == G.OperationTypeMutation = Telem.Mutation
+                         | otherwise = Telem.Query
+      (telemTimeIO, resp) <- E.execRemoteGQ env reqId userInfo reqHeaders reqUnparsed rsi opDef
+      return (telemCacheHit, Telem.Remote, (telemTimeIO, telemQueryType, resp))
 
+-- | Run (execute) a batched GraphQL query (see 'GQLBatchedReqs')
+runGQBatched
+  :: ( HasVersion
+     , MonadIO m
+     , MonadError QErr m
+     , MonadReader E.ExecutionCtx m
+     , E.MonadGQLExecutionCheck m
+     , MonadQueryLog m
+     , MonadTrace m
+     , MonadExecuteQuery m
+     )
+  => Env.Environment
+  -> L.Logger L.Hasura
+  -> RequestId
+  -> ResponseInternalErrorsConfig
+  -> UserInfo
+  -> Wai.IpAddress
+  -> [HTTP.Header]
+  -> E.GraphQLQueryType
+  -> GQLBatchedReqs GQLQueryText
+  -- ^ the batched request with unparsed GraphQL query
+  -> m (HttpResponse EncJSON)
+runGQBatched env logger reqId responseErrorsConfig userInfo ipAddress reqHdrs queryType query =
+  case query of
+    GQLSingleRequest req ->
+      runGQ env logger reqId userInfo ipAddress reqHdrs queryType req
+    GQLBatchedReqs reqs -> do
+      -- It's unclear what we should do if we receive multiple
+      -- responses with distinct headers, so just do the simplest thing
+      -- in this case, and don't forward any.
+      let includeInternal = shouldIncludeInternal (_uiRole userInfo) responseErrorsConfig
+          removeHeaders =
+            flip HttpResponse []
+            . encJFromList
+            . map (either (encJFromJValue . encodeGQErr includeInternal) _hrBody)
 
-assertSameLocationNodes :: (MonadError QErr m) => [VT.TypeLoc] -> m ()
-assertSameLocationNodes typeLocs =
-  unless (allEq typeLocs) $ throw400 NotSupported msg
+      removeHeaders <$> traverse (try . runGQ env logger reqId userInfo ipAddress reqHdrs queryType) reqs
   where
-    allEq xs = case xs of
-      [] -> True
-      _  -> Set.size (Set.fromList xs) == 1
-    msg = "cannot mix nodes from two different graphql servers"
+    try = flip catchError (pure . Left) . fmap Right
 
--- TODO: we should retire the function asap
-getTopLevelNodes :: G.TypedOperationDefinition -> [G.Name]
-getTopLevelNodes opDef =
-  mapMaybe f $ G._todSelectionSet opDef
-  where
-    -- TODO: this will fail when there is a fragment at the top level
-    f = \case
-      G.SelectionField fld        -> Just $ G._fName fld
-      G.SelectionFragmentSpread _ -> Nothing
-      G.SelectionInlineFragment _ -> Nothing
 
-gatherTypeLocs :: GCtx -> [G.Name] -> [VT.TypeLoc]
-gatherTypeLocs gCtx nodes =
-  catMaybes $ flip map nodes $ \node ->
-    VT._fiLoc <$> Map.lookup node schemaNodes
-  where
-    schemaNodes =
-      let qr = VT._otiFields $ _gQueryRoot gCtx
-          mr = VT._otiFields <$> _gMutRoot gCtx
-      in maybe qr (Map.union qr) mr
+runQueryDB
+  :: ( MonadIO m
+     , MonadError QErr m
+     , MonadReader E.ExecutionCtx m
+     , MonadQueryLog m
+     , MonadTrace m
+     , MonadExecuteQuery m
+     )
+  => RequestId
+  -> (GQLReqUnparsed, GQLReqParsed)
+  -> [QueryRootField UnpreparedValue]
+  -> UserInfo
+  -> (Tracing.TraceT (LazyTx QErr) EncJSON, EQ.GeneratedSqlMap)
+  -> m (DiffTime, Telem.QueryType, HTTP.ResponseHeaders, EncJSON)
+  -- ^ Also return 'Mutation' when the operation was a mutation, and the time
+  -- spent in the PG query; for telemetry.
+runQueryDB reqId (query, queryParsed) asts _userInfo (tx, genSql) =  do
+  -- log the generated SQL and the graphql query
+  E.ExecutionCtx logger _ pgExecCtx _ _ _ _ <- ask
+  logQueryLog logger query (Just genSql) reqId
+  (telemTimeIO, respE) <- withElapsedTime $ runExceptT $ trace "Query" $
+    Tracing.interpTraceT id $ executeQuery queryParsed asts (Just genSql) pgExecCtx Q.ReadOnly tx
+  (respHdrs,resp) <- liftEither respE
+  let !json = encodeGQResp $ GQSuccess $ encJToLBS resp
+      telemQueryType = Telem.Query
+  return (telemTimeIO, telemQueryType, respHdrs, json)
 
+runMutationDB
+  :: ( MonadIO m
+     , MonadError QErr m
+     , MonadReader E.ExecutionCtx m
+     , MonadQueryLog m
+     , MonadTrace m
+     )
+  => RequestId
+  -> GQLReqUnparsed
+  -> UserInfo
+  -> Tracing.TraceT (LazyTx QErr) EncJSON
+  -> m (DiffTime, Telem.QueryType, EncJSON)
+  -- ^ Also return 'Mutation' when the operation was a mutation, and the time
+  -- spent in the PG query; for telemetry.
+runMutationDB reqId query userInfo tx =  do
+  E.ExecutionCtx logger _ pgExecCtx _ _ _ _ <- ask
+  -- log the graphql query
+  logQueryLog logger query Nothing reqId
+  ctx <- Tracing.currentContext
+  (telemTimeIO, respE) <- withElapsedTime $  runExceptT $ trace "Mutation" $
+    Tracing.interpTraceT (runLazyTx pgExecCtx Q.ReadWrite . withTraceContext ctx .  withUserInfo userInfo)  tx
+  resp <- liftEither respE
+  let !json = encodeGQResp $ GQSuccess $ encJToLBS resp
+      telemQueryType = Telem.Mutation
+  return (telemTimeIO, telemQueryType, json)
+
+{-
 runHasuraGQ
-  :: (MonadIO m, MonadError QErr m)
-  => Q.PGPool -> Q.TxIsolation
+  :: ( MonadIO m
+     , MonadError QErr m
+     , MonadReader E.ExecutionCtx m
+     , MonadQueryLog m
+     , MonadTrace m
+     , MonadExecuteQuery m
+     )
+  => RequestId
+  -> (GQLReqUnparsed, GQLReqParsed)
   -> UserInfo
-  -> SchemaCache
-  -> VQ.QueryParts
-  -> m BL.ByteString
-runHasuraGQ pool isoL userInfo sc queryParts = do
-  (gCtx, _) <- flip runStateT sc $ getGCtx (userRole userInfo) gCtxMap
-  (opTy, fields) <- runReaderT (VQ.validateGQ queryParts) gCtx
-  when (opTy == G.OperationTypeSubscription) $ throw400 UnexpectedPayload
-    "subscriptions are not supported over HTTP, use websockets instead"
-  let tx = R.resolveSelSet userInfo gCtx opTy fields
-  resp <- liftIO (runExceptT $ runTx tx) >>= liftEither
-  return $ encodeGQResp $ GQSuccess resp
-  where
-    gCtxMap = scGCtxMap sc
-    runTx tx = runLazyTx pool isoL $ withUserInfo userInfo tx
+  -> E.ExecOp (Tracing.TraceT (LazyTx QErr))
+  -> m (DiffTime, Telem.QueryType, HTTP.ResponseHeaders, EncJSON)
+  -- ^ Also return 'Mutation' when the operation was a mutation, and the time
+  -- spent in the PG query; for telemetry.
+runHasuraGQ reqId (query, queryParsed) userInfo resolvedOp = do
+  (E.ExecutionCtx logger _ pgExecCtx _ _ _ _ _) <- ask
+  (telemTimeIO, respE) <- withElapsedTime $ runExceptT $ case resolvedOp of
+    E.ExOpQuery tx genSql asts -> trace "Query" $ do
+      -- log the generated SQL and the graphql query
+      logQueryLog logger query genSql reqId
+      Tracing.interpTraceT id $ executeQuery queryParsed asts genSql pgExecCtx Q.ReadOnly tx
 
-runRemoteGQ
-  :: (MonadIO m, MonadError QErr m)
-  => HTTP.Manager
-  -> UserInfo
-  -> [N.Header]
-  -> BL.ByteString
-  -- ^ the raw request string
-  -> RemoteSchemaInfo
-  -> G.TypedOperationDefinition
-  -> m BL.ByteString
-runRemoteGQ manager userInfo reqHdrs q rsi opDef = do
-  let opTy = G._todType opDef
-  when (opTy == G.OperationTypeSubscription) $
-    throw400 NotSupported "subscription to remote server is not supported"
-  hdrs <- getHeadersFromConf hdrConf
-  let confHdrs   = map (\(k, v) -> (CI.mk $ CS.cs k, CS.cs v)) hdrs
-      clientHdrs = bool [] filteredHeaders fwdClientHdrs
-      options    = wreqOptions manager (userInfoToHdrs ++ clientHdrs ++ confHdrs)
+    E.ExOpMutation respHeaders tx -> trace "Mutate" $ do
+      logQueryLog logger query Nothing reqId
+      ctx <- Tracing.currentContext
+      (respHeaders,) <$>
+        Tracing.interpTraceT (runLazyTx pgExecCtx Q.ReadWrite . withTraceContext ctx . withUserInfo userInfo) tx
 
-  res  <- liftIO $ try $ Wreq.postWith options (show url) q
-  resp <- either httpThrow return res
-  return $ resp ^. Wreq.responseBody
+    E.ExOpSubs _ ->
+      throw400 UnexpectedPayload
+      "subscriptions are not supported over HTTP, use websockets instead"
 
-  where
-    RemoteSchemaInfo url hdrConf fwdClientHdrs = rsi
-    httpThrow :: (MonadError QErr m) => HTTP.HttpException -> m a
-    httpThrow err = throw500 $ T.pack . show $ err
-
-    userInfoToHdrs = map (\(k, v) -> (CI.mk $ CS.cs k, CS.cs v)) $
-                 userInfoToList userInfo
-    filteredHeaders = flip filter reqHdrs $ \(n, _) ->
-      n `notElem` [ "Content-Length", "Content-MD5", "User-Agent", "Host"
-                  , "Origin", "Referer" , "Accept", "Accept-Encoding"
-                  , "Accept-Language", "Accept-Datetime"
-                  , "Cache-Control", "Connection", "DNT"
-                  ]
+  (respHdrs, resp) <- liftEither respE
+  let !json = encodeGQResp $ GQSuccess $ encJToLBS resp
+      telemQueryType = case resolvedOp of E.ExOpMutation{} -> Telem.Mutation ; _ -> Telem.Query
+  return (telemTimeIO, telemQueryType, respHdrs, json)
+-}

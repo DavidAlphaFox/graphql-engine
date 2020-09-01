@@ -44,7 +44,6 @@ class Chat extends React.Component {
   // set refetch function (coming from child <Query> component) using callback
   setRefetch = (refetch) => {
     this.setState({
-      ...this.state,
       refetch
     })
   }
@@ -104,11 +103,11 @@ class Chat extends React.Component {
               Backend
             </a>
             &nbsp; | &nbsp;
-            <a href="https://github.com/hasura/graphql-engine/tree/master/community/examples/realtime-chat" target="_blank" rel="noopener noreferrer">
+            <a href="https://github.com/hasura/graphql-engine/tree/master/community/sample-apps/realtime-chat" target="_blank" rel="noopener noreferrer">
               Source
             </a>
             &nbsp; | &nbsp;
-            <a href="https://blog.hasura.io/building-a-realtime-chat-app-with-graphql-subscriptions-d68cd33e73f" target="_blank" rel="noopener noreferrer">
+            <a href="https://hasura.io/blog/building-a-realtime-chat-app-with-graphql-subscriptions-d68cd33e73f" target="_blank" rel="noopener noreferrer">
               Blogpost
             </a>
           </div>

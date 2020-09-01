@@ -135,4 +135,7 @@ ca.srl
 webhook-req.cnf
 webhook.csr
 *.tix
-*.tix2
+
+# nodejs:
+/node_modules/
+/package-lock.json

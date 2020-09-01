@@ -19,12 +19,12 @@ class App extends Component {
   }
   componentWillReceiveProps(nextProps) {
     if ( nextProps.vehicleId !== this.props.vehicleId ) {
-      this.setState({ ...this.state, vehicleId: nextProps.vehicleId });
+      this.setState({ vehicleId: nextProps.vehicleId });
     }
   }
   render() {
     const LOCATION_SUBSCRIPTION = gql`
-        subscription getLocation($vehicleId: Int!) {
+        subscription getLocation($vehicleId: String!) {
             vehicle(where: {id: {_eq: $vehicleId}}) {
                 locations(order_by: {timestamp:desc}, limit: 1) {
                     location

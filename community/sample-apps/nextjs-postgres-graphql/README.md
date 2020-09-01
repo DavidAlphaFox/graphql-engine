@@ -2,6 +2,8 @@
 
 Boilerplate to get started with Nextjs, Hasura GraphQL engine as CMS and postgres as database using this awesome library: [withData](https://github.com/adamsoffer/next-apollo).
 
+[![Edit nextjs-postgres-graphql](https://codesandbox.io/static/img/play-codesandbox.svg)](https://codesandbox.io/s/github/hasura/graphql-engine/tree/master/community/sample-apps/nextjs-postgres-graphql?fontsize=14)
+
 ![Nextjs Postgres GraphQL](./assets/nextjs-postgres-graphql.png)
 
 # Tutorial
@@ -11,7 +13,7 @@ Boilerplate to get started with Nextjs, Hasura GraphQL engine as CMS and postgre
   [![Deploy to
   heroku](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/hasura/graphql-engine-heroku)
 
-  Please checkout our [docs](https://docs.hasura.io/1.0/graphql/manual/deployment/index.html) for other deployment methods
+  Please checkout our [docs](https://hasura.io/docs/1.0/graphql/manual/deployment/index.html) for other deployment methods
 
 - Get the Heroku app URL (say `my-app.herokuapp.com`)
 - Create `author` table:
@@ -48,7 +50,7 @@ Boilerplate to get started with Nextjs, Hasura GraphQL engine as CMS and postgre
   // can also be a function that accepts a `context` object (SSR only) and returns a config
   const config = {
     link: new HttpLink({
-      uri: 'https://my-app.herokuapp.com/v1alpha1/graphql', // <- Configure GraphQL Server URL (must be absolute)
+      uri: 'https://my-app.herokuapp.com/v1/graphql', // <- Configure GraphQL Server URL (must be absolute)
     })
   }
 
@@ -77,13 +79,17 @@ Boilerplate to get started with Nextjs, Hasura GraphQL engine as CMS and postgre
           query={ query }
           fetchPolicy={ 'cache-and-network' }
         >
-          {({ loading, data: { author:authors }}) => {
+          {({ loading, data, error }) => {
+            if(error) {
+              return (<div>Error..</div>);
+            }
             return (
               <div>
-                <AuthorList authors={authors} />
+                <h1>My Authors </h1>
+                <AuthorList authors={data ? data.author: []} />
               </div>
             );
-          }}
+        }}
         </Query>
 
       ```

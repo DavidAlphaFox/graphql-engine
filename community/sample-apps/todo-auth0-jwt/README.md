@@ -12,13 +12,38 @@ Auth0 as our authentication and JWT token provider.
 
 ## Add rules for custom JWT claims
 
-In the Auth0 dashboard, navigate to "Rules". Add the following rules to add our custom JWT claims:
+Auth0 has multiple versions of its SDK available and unfortunately they have different semantics
+when it comes to JWT handling. If you're using [Auth0.js](https://auth0.com/docs/libraries/auth0js),
+you'll need to add a rule to update the `idToken`. If you're using the [Auth0 Single Page App SDK](https://auth0.com/docs/libraries/auth0-spa-js),
+you'll need to add a rule to update the `accessToken`. If you update the wrong token, the necessary
+Hasura claims will not appear in the generated JWT and your client will not authenticate properly.
+
+In both cases you'll want to open the Auth0 dashboard and then navigate to "Rules". Then add a rule
+to add the custom JWT claims. You can name the rule anything you want.
+
+For Auth0.js:
 
 ```javascript
 function (user, context, callback) {
   const namespace = "https://hasura.io/jwt/claims";
   context.idToken[namespace] = 
     { 
+      'x-hasura-default-role': 'user',
+      // do some custom logic to decide allowed roles
+      'x-hasura-allowed-roles': user.email === 'admin@foobar.com' ? ['user', 'admin'] : ['user'],
+      'x-hasura-user-id': user.user_id
+    };
+  callback(null, user, context);
+}
+```
+
+For auth0-spa-js:
+
+```javascript
+function (user, context, callback) {
+  const namespace = "https://hasura.io/jwt/claims";
+  context.accessToken[namespace] =
+    {
       'x-hasura-default-role': 'user',
       // do some custom logic to decide allowed roles
       'x-hasura-allowed-roles': user.email === 'admin@foobar.com' ? ['user', 'admin'] : ['user'],
@@ -47,11 +72,11 @@ awk 'NF {sub(/\r/, ""); printf "%s\\n",$0;}' yourauth0subdomain.pem
 After deploying, add the following environment variables to configure JWT mode:
 
 ```
-HASURA_GRAPHQL_ACCESS_KEY: yoursecretaccesskey
+HASURA_GRAPHQL_ADMIN_SECRET: youradminsecretkey
 ```
 
 ```
-HASURA_GRAPHQL_JWT_SECRET: {"type":"RS256", "key": "<the-certificate-data-in-one-line"}
+HASURA_GRAPHQL_JWT_SECRET: {"type":"RS256", "key": "<the-certificate-data-in-one-line>"}
 ```
 
 For example, (copy the certificate from above step or use generated config from https://hasura.io/jwt-config):
@@ -66,15 +91,15 @@ Save changes.
 
 Setup values in `todo-app/src/constants.js`:
 1. Auth0 domain
-2. GraphQL engine deployed URL, e.g: `https://hasura-todo-auth0-jwt.herokuapp.com/v1alpha1/graphql`
+2. GraphQL engine deployed URL, e.g: `https://hasura-todo-auth0-jwt.herokuapp.com/v1/graphql`
 3. Auth0 application's client id
 
 ## Create the initial tables
-1. Add your database URL and access key in `hasura/config.yaml`
+1. Add your database URL and admin secret in `hasura/config.yaml`
 
 ```yaml
 endpoint: https://<hge-heroku-url>
-access_key: <your-access-key>
+admin_secret: <your-admin-secret>
 ```
 
 2. Run `hasura migrate apply` to create the required tables and permissions for the todo app

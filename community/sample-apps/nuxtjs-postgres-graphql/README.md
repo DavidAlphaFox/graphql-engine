@@ -2,6 +2,8 @@
 
 > Boilerplate to get started with Nuxt.js, Hasura GraphQL engine as CMS and postgres as database using the [create-nuxt-app](https://nuxtjs.org/guide/installation) and [@nuxtjs/apollo](https://github.com/nuxt-community/apollo-module) module.
 
+[![Edit nuxtjs-postgres-graphql](https://codesandbox.io/static/img/play-codesandbox.svg)](https://codesandbox.io/s/github/hasura/graphql-engine/tree/master/community/sample-apps/nuxtjs-postgres-graphql?fontsize=14)
+
 # Tutorial
 
 - Deploy Postgres and GraphQL Engine on Heroku:
@@ -9,7 +11,7 @@
   [![Deploy to
   heroku](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/hasura/graphql-engine-heroku)
 
-  Please checkout our [docs](https://docs.hasura.io/1.0/graphql/manual/deployment/index.html) for other deployment methods
+  Please checkout our [docs](https://hasura.io/docs/1.0/graphql/manual/deployment/index.html) for other deployment methods
 
 - Get the Heroku app URL (say `my-app.herokuapp.com`)
 - Create `author` table:
@@ -49,11 +51,11 @@ columns: `id`, `title`, `content`, `author_id` (foreign key to `author` table's 
     export default function(context){
       return {
             httpLinkOptions: {
-                uri: 'https://my-app.herokuapp.com/v1alpha1/graphql',
+                uri: 'https://my-app.herokuapp.com/v1/graphql',
                 credentials: 'same-origin'
             },
             cache: new InMemoryCache(),
-            wsEndpoint: 'ws://my-app.herokuapp.com/v1alpha1/graphql',
+            wsEndpoint: 'ws://my-app.herokuapp.com/v1/graphql',
       }
     }
   ```
